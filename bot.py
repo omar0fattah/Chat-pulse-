@@ -908,7 +908,7 @@ async def setup(interaction: discord.Interaction, channel: discord.TextChannel):
                    f"💡 Use `/category` to change categories!",
         color=0x00FF00
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="category", description="Open category selection menu")
 async def category(interaction: discord.Interaction):
