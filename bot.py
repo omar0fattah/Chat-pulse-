@@ -884,6 +884,7 @@ bot = ChatPulseBot()
 @bot.tree.command(name="setup", description="Set the channel for Chat Pulse to revive")
 @app_commands.describe(channel="The channel to watch and revive")
 async def setup(interaction: discord.Interaction, channel: discord.TextChannel):
+ await interaction.response.defer()
     """Set up the revive channel"""
     guild_id = str(interaction.guild_id)
     
