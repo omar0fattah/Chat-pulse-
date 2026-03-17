@@ -1122,7 +1122,7 @@ async def donate(interaction: discord.Interaction):
     """Donation link"""
     embed = discord.Embed(
         title="☕ Support Chat Pulse",
-        description="Love the bot? Consider supporting!\n\n[💰 Buy Me a Coffee](https://buymeacoffee.com)\n[❤️ Become a Patron](https://patreon.com)",
+        description="Love the bot? Consider supporting!\n\n[💰 Buy Me a Coffee](https://buymeacoffee.com/omar_fattah)\n[❤️ Become a Patron](https://www.patreon.com/cw/Omar_fattah)",
         color=0x00AAFF
     )
     await interaction.response.send_message(embed=embed)
