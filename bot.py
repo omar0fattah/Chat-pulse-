@@ -948,7 +948,7 @@ DEFAULT_QUESTIONS = {
 }
 
 # ==================== DATABASE SETUP ====================
-    async def init_db():
+async def init_db():
     """Initialize the database tables"""
     async with aiosqlite.connect(DB_PATH) as db:
         # Servers table
