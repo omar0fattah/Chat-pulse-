@@ -948,6 +948,7 @@ DEFAULT_QUESTIONS = {
 }
 
 # ==================== DATABASE SETUP ====================
+   # ==================== DATABASE SETUP ====================
 async def init_db():
     """Initialize the database tables"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1409,7 +1410,7 @@ class ChatPulseBot(discord.Client):
 
 bot = ChatPulseBot()
 
-# ==================== COMMANDS ====================
+# ==================== COMMANDS - ALL FIXED WITH DEFER ====================
 
 @bot.tree.command(name="setup", description="Set up a revive channel")
 @app_commands.describe(channel="The channel to revive", hours="Hours of inactivity before revive (default: 2)")
@@ -1417,8 +1418,6 @@ async def setup(interaction: discord.Interaction, channel: discord.TextChannel, 
     await interaction.response.defer()
     
     guild_id = str(interaction.guild_id)
-    
-    # Save channel
     await save_channel(guild_id, channel.id, hours)
     
     embed = discord.Embed(
@@ -1426,7 +1425,6 @@ async def setup(interaction: discord.Interaction, channel: discord.TextChannel, 
         description=f"📌 **Channel:** {channel.mention}\n⏰ **Cooldown:** {hours} hours",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="addchannel", description="Add another revive channel")
@@ -1442,7 +1440,6 @@ async def addchannel(interaction: discord.Interaction, channel: discord.TextChan
         description=f"📌 **Channel:** {channel.mention}\n⏰ **Cooldown:** {hours} hours",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="removechannel", description="Remove a revive channel")
@@ -1458,7 +1455,6 @@ async def removechannel(interaction: discord.Interaction, channel: discord.TextC
         description=f"📌 **Channel:** {channel.mention} has been removed.",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="listchannels", description="List all revive channels")
@@ -1472,11 +1468,7 @@ async def listchannels(interaction: discord.Interaction):
         await interaction.followup.send("❌ No channels set up yet. Use `/setup` to add one.")
         return
     
-    embed = discord.Embed(
-        title="📋 Revive Channels",
-        color=0x00AAFF
-    )
-    
+    embed = discord.Embed(title="📋 Revive Channels", color=0x00AAFF)
     for ch_id_str, ch_data in data['channels'].items():
         if ch_id_str == "category_selector":
             continue
@@ -1487,7 +1479,6 @@ async def listchannels(interaction: discord.Interaction):
                 value=f"⏰ Cooldown: {ch_data['cooldown']}h",
                 inline=False
             )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="remove", description="Remove ALL setup data for this server")
@@ -1495,8 +1486,6 @@ async def remove_all(interaction: discord.Interaction):
     await interaction.response.defer()
     
     guild_id = str(interaction.guild_id)
-    
-    # Delete all data
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM channels WHERE guild_id = ?", (guild_id,))
         await db.execute("DELETE FROM custom_categories WHERE guild_id = ?", (guild_id,))
@@ -1509,7 +1498,6 @@ async def remove_all(interaction: discord.Interaction):
         description="All channels, custom categories, questions, and schedules have been deleted.",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="category", description="Choose a question category")
@@ -1520,13 +1508,11 @@ async def category(interaction: discord.Interaction):
     data = await get_guild_data(guild_id)
     
     view = CategoryView(bot, data)
-    
     embed = discord.Embed(
         title="🎯 Select Category",
         description="Choose the type of questions you want for your server.",
         color=0x00AAFF
     )
-    
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="createcategory", description="Create a custom category")
@@ -1534,15 +1520,12 @@ async def category(interaction: discord.Interaction):
 async def createcategory(interaction: discord.Interaction, name: str):
     await interaction.response.defer()
     
-    guild_id = str(interaction.guild_id)
-    
-    # Validate name
     if not name.isalnum() and not name.replace('_', '').isalnum():
         await interaction.followup.send("❌ Category name can only contain letters, numbers, and underscores.")
         return
     
+    guild_id = str(interaction.guild_id)
     name = name.lower().replace(' ', '_')
-    
     await add_custom_category(guild_id, name)
     
     embed = discord.Embed(
@@ -1550,7 +1533,6 @@ async def createcategory(interaction: discord.Interaction, name: str):
         description=f"Category **{name}** has been created! Use `/addquestion` to add questions.",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="deletecategory", description="Delete a custom category")
@@ -1560,7 +1542,6 @@ async def deletecategory(interaction: discord.Interaction, name: str):
     
     guild_id = str(interaction.guild_id)
     name = name.lower().replace(' ', '_')
-    
     await delete_custom_category(guild_id, name)
     
     embed = discord.Embed(
@@ -1568,7 +1549,6 @@ async def deletecategory(interaction: discord.Interaction, name: str):
         description=f"Category **{name}** and all its questions have been deleted.",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="addquestion", description="Add a custom question")
@@ -1578,7 +1558,6 @@ async def addquestion(interaction: discord.Interaction, category: str, question:
     
     guild_id = str(interaction.guild_id)
     category = category.lower().replace(' ', '_')
-    
     await add_custom_question(guild_id, category, question)
     
     embed = discord.Embed(
@@ -1586,7 +1565,6 @@ async def addquestion(interaction: discord.Interaction, category: str, question:
         description=f"Added to **{category}**:\n*{question}*",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="removequestion", description="Remove a custom question")
@@ -1596,7 +1574,6 @@ async def removequestion(interaction: discord.Interaction, category: str, index:
     
     guild_id = str(interaction.guild_id)
     category = category.lower().replace(' ', '_')
-    
     await remove_custom_question(guild_id, category, index)
     
     embed = discord.Embed(
@@ -1604,7 +1581,6 @@ async def removequestion(interaction: discord.Interaction, category: str, index:
         description=f"Removed question #{index} from **{category}**.",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="listquestions", description="List all questions in a category")
@@ -1616,20 +1592,15 @@ async def listquestions(interaction: discord.Interaction, category: str):
     data = await get_guild_data(guild_id)
     category = category.lower().replace(' ', '_')
     
-    embed = discord.Embed(
-        title=f"📚 Questions in {category}",
-        color=0x00AAFF
-    )
+    embed = discord.Embed(title=f"📚 Questions in {category}", color=0x00AAFF)
     
-    # Default questions
     if category in DEFAULT_QUESTIONS:
-        default_qs = DEFAULT_QUESTIONS[category][:10]  # Show first 10
+        default_qs = DEFAULT_QUESTIONS[category][:10]
         default_text = "\n".join([f"• {q}" for q in default_qs])
         if len(DEFAULT_QUESTIONS[category]) > 10:
             default_text += f"\n*... and {len(DEFAULT_QUESTIONS[category]) - 10} more*"
         embed.add_field(name="📖 Default Questions", value=default_text, inline=False)
     
-    # Custom questions
     if category in data.get('custom_questions', {}):
         custom_qs = data['custom_questions'][category]
         if custom_qs:
@@ -1643,7 +1614,6 @@ async def listquestions(interaction: discord.Interaction, category: str):
 async def schedule_add(interaction: discord.Interaction, channel: discord.TextChannel, time: str):
     await interaction.response.defer()
     
-    # Validate time format
     try:
         datetime.strptime(time, "%H:%M")
     except ValueError:
@@ -1658,7 +1628,6 @@ async def schedule_add(interaction: discord.Interaction, channel: discord.TextCh
         description=f"📌 **Channel:** {channel.mention}\n⏰ **Time:** {time} daily",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="schedule_remove", description="Remove a scheduled revive")
@@ -1674,7 +1643,6 @@ async def schedule_remove(interaction: discord.Interaction, channel: discord.Tex
         description=f"Removed {time} from {channel.mention}",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="schedule_removeall", description="Remove all schedules from a channel")
@@ -1690,7 +1658,6 @@ async def schedule_removeall(interaction: discord.Interaction, channel: discord.
         description=f"All schedules removed from {channel.mention}",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="schedule_list", description="List all schedules")
@@ -1701,10 +1668,7 @@ async def schedule_list(interaction: discord.Interaction, channel: discord.TextC
     guild_id = str(interaction.guild_id)
     data = await get_guild_data(guild_id)
     
-    embed = discord.Embed(
-        title="📋 Scheduled Revives",
-        color=0x00AAFF
-    )
+    embed = discord.Embed(title="📋 Scheduled Revives", color=0x00AAFF)
     
     if channel:
         ch_id = str(channel.id)
@@ -1734,8 +1698,6 @@ async def revive(interaction: discord.Interaction, channel: discord.TextChannel 
     target_channel = channel or interaction.channel
     guild_id = str(interaction.guild_id)
     
-    # Get category
-    cat_row = None
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT last_message_time FROM channels WHERE guild_id = ? AND channel_id = ?",
@@ -1746,7 +1708,6 @@ async def revive(interaction: discord.Interaction, channel: discord.TextChannel 
     category = cat_row[0] if cat_row else "general"
     data = await get_guild_data(guild_id)
     
-    # Get questions
     questions = []
     if category in DEFAULT_QUESTIONS:
         questions.extend(DEFAULT_QUESTIONS[category])
@@ -1758,7 +1719,6 @@ async def revive(interaction: discord.Interaction, channel: discord.TextChannel 
         return
     
     question = random.choice(questions)
-    
     embed = discord.Embed(
         title="🔄 Manual Revive",
         description=f"**{category.title()} Question:**\n{question}",
@@ -1767,8 +1727,6 @@ async def revive(interaction: discord.Interaction, channel: discord.TextChannel 
     
     await target_channel.send(embed=embed)
     await interaction.followup.send(f"✅ Sent revive to {target_channel.mention}", ephemeral=True)
-    
-    # Reset timer if it's a tracked channel
     await update_last_message(guild_id, target_channel.id)
 
 @bot.tree.command(name="status", description="Check chat activity")
@@ -1779,7 +1737,6 @@ async def status(interaction: discord.Interaction, channel: discord.TextChannel 
     target_channel = channel or interaction.channel
     guild_id = str(interaction.guild_id)
     
-    # Get channel data
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = sqlite3.Row
         async with db.execute(
@@ -1797,7 +1754,6 @@ async def status(interaction: discord.Interaction, channel: discord.TextChannel 
     hours = int(time_since.total_seconds() / 3600)
     minutes = int((time_since.total_seconds() / 60) % 60)
     
-    # Get category
     async with db.execute(
         "SELECT last_message_time FROM channels WHERE guild_id = ? AND channel_id = ?",
         (guild_id, "category_selector")
@@ -1814,7 +1770,6 @@ async def status(interaction: discord.Interaction, channel: discord.TextChannel 
                    f"💬 **Last Message:** {hours}h {minutes}m ago",
         color=0x00AAFF
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="cooldown", description="Change cooldown for a channel")
@@ -1829,7 +1784,6 @@ async def cooldown(interaction: discord.Interaction, hours: int, channel: discor
     target_channel = channel or interaction.channel
     guild_id = str(interaction.guild_id)
     
-    # Update cooldown
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE channels SET cooldown_hours = ? WHERE guild_id = ? AND channel_id = ?",
@@ -1842,7 +1796,6 @@ async def cooldown(interaction: discord.Interaction, hours: int, channel: discor
         description=f"📌 **Channel:** {target_channel.mention}\n⏰ **New Cooldown:** {hours} hours",
         color=0x00FF00
     )
-    
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="settings", description="View all server settings")
@@ -1852,13 +1805,6 @@ async def settings(interaction: discord.Interaction):
     guild_id = str(interaction.guild_id)
     data = await get_guild_data(guild_id)
     
-    embed = discord.Embed(
-        title="⚙️ Server Settings",
-        color=0x00AAFF
-    )
-    
-    # Get category
-    cat_row = None
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT last_message_time FROM channels WHERE guild_id = ? AND channel_id = ?",
@@ -1867,9 +1813,10 @@ async def settings(interaction: discord.Interaction):
             cat_row = await cursor.fetchone()
     
     category = cat_row[0] if cat_row else "general"
+    
+    embed = discord.Embed(title="⚙️ Server Settings", color=0x00AAFF)
     embed.add_field(name="🗂️ Current Category", value=category.title(), inline=False)
     
-    # Channels
     channels_list = []
     for ch_id_str, ch_data in data['channels'].items():
         if ch_id_str != "category_selector":
@@ -1882,15 +1829,12 @@ async def settings(interaction: discord.Interaction):
     else:
         embed.add_field(name="📌 Revive Channels", value="None set up", inline=False)
     
-    # Custom categories
     if data['custom_categories']:
         embed.add_field(name="📁 Custom Categories", value=", ".join(data['custom_categories']), inline=False)
     
-    # Schedules
     schedule_count = sum(len(times) for times in data['schedules'].values())
     embed.add_field(name="⏰ Schedules", value=f"{schedule_count} active", inline=False)
     
-    # Custom questions count
     custom_q_count = sum(len(qs) for qs in data['custom_questions'].values())
     embed.add_field(name="✨ Custom Questions", value=f"{custom_q_count} total", inline=False)
     
@@ -1905,26 +1849,16 @@ async def ping(interaction: discord.Interaction):
 async def stats(interaction: discord.Interaction):
     await interaction.response.defer()
     
-    # Count servers
     server_count = len(bot.guilds)
-    
-    # Count total questions
     default_q_count = sum(len(q) for q in DEFAULT_QUESTIONS.values())
     
-    # Count custom questions from DB
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM custom_questions") as cursor:
             custom_q_count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM schedules") as cursor:
+            schedule_count = (await cursor.fetchone())[0]
     
-    # Count schedules
-    async with db.execute("SELECT COUNT(*) FROM schedules") as cursor:
-        schedule_count = (await cursor.fetchone())[0]
-    
-    embed = discord.Embed(
-        title="📊 Chat Pulse Statistics",
-        color=0x00AAFF
-    )
-    
+    embed = discord.Embed(title="📊 Chat Pulse Statistics", color=0x00AAFF)
     embed.add_field(name="🖥️ Servers", value=str(server_count), inline=True)
     embed.add_field(name="📚 Default Questions", value=str(default_q_count), inline=True)
     embed.add_field(name="✨ Custom Questions", value=str(custom_q_count), inline=True)
@@ -1958,7 +1892,6 @@ async def vote(interaction: discord.Interaction):
 @bot.tree.command(name="feedback", description="Send feedback to the developer")
 @app_commands.describe(message="Your feedback or suggestion")
 async def feedback(interaction: discord.Interaction, message: str):
-    # Log to console (you can add a webhook later)
     print(f"📝 FEEDBACK from {interaction.user} ({interaction.user.id}) in {interaction.guild}: {message}")
     
     embed = discord.Embed(
@@ -2050,7 +1983,6 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.set_footer(text="Chat Pulse • Keeping communities alive • 100% Free Forever")
-    
     await interaction.response.send_message(embed=embed)
 
 # ==================== RUN BOT ====================
@@ -2060,5 +1992,4 @@ async def main():
     await bot.start(TOKEN)
 
 if __name__ == "__main__":
-    asyncio.run(main())
-        
+    asyncio.run(main())             
