@@ -1061,6 +1061,7 @@ async def ping(interaction: discord.Interaction):
 @tree.command(name="setup_revive", description="Configure revive channel and role")
 @app_commands.describe(channel="Channel to post revive messages", role="Role to mention (optional)")
 async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, role: Optional[discord.Role] = None):
+    """Set up the revive channel"""
     await interaction.response.defer(thinking=True)
     await set_guild_config(interaction.guild_id, revive_channel_id=channel.id, revive_role_id=(role.id if role else None))
     await interaction.followup.send(f"✅ Revive set to {channel.mention}" + (f" and will mention {role.mention}" if role else ""), ephemeral=True)
@@ -1095,10 +1096,3 @@ async def on_ready():
     bot.loop.create_task(check_inactivity_loop(bot))
     await tree.sync()
     print(f"Bot ready: {bot.user}")
-
-
-  
-
-
-
-
