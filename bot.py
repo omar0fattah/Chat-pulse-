@@ -1321,7 +1321,7 @@ async def _shutdown_tasks():
 
 # Hook into signal/exit to close DB and tasks
 def _register_shutdown_handlers():
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     async def _cleanup():
         logger.info("Cleaning up before shutdown")
