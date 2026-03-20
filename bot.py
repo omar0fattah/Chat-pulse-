@@ -13,8 +13,16 @@ import traceback
 import logging
 
 # ==================== CONFIG ====================
-TOKEN = os.environ.get('TOKEN')
+TOKEN = os.environ.get('TOKEN') or os.environ.get('DISCORD_BOT_TOKEN')
 DB_PATH = 'chatpulse.db'
+
+# ==================== BOT SETUP ====================
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
+
 
 # ==================== DEFAULT QUESTIONS (700+) ====================
 DEFAULT_QUESTIONS = {
