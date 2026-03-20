@@ -1,16 +1,16 @@
-from discord.ext import commands
-from discord import app_commands
+import os
 import discord
+from discord.ext import commands
 from discord import app_commands
 import asyncio
 import random
-import os
 import sqlite3
 import json
 from datetime import datetime, timedelta
 import aiosqlite
 from typing import Optional, List, Dict, Any
 import traceback
+import logging
 
 # ==================== CONFIG ====================
 TOKEN = os.environ.get('TOKEN')
