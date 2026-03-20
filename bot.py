@@ -947,4 +947,399 @@ DEFAULT_QUESTIONS = {
     ]
 }
 
+
 # ==================== DATABASE SETUP ====================    
+
+# --- From line 950: Database and remaining handlers ---
+# Paste this block starting at line 950 of your existing bot.py to replace/complete
+# the database and remaining command/loop logic. This code uses aiosqlite to avoid
+# blocking the event loop and preserves your original concepts (guild configs,
+# question storage, inactivity checks, and command followups) while fixing common
+# issues (blocking I/O, missing error handling, silent failures, and logging).
+
+import aiosqlite
+import asyncio
+import logging
+from typing import Optional, List, Dict, Any
+
+# Ensure logger exists (if you already created one earlier, this will reuse it)
+logger = logging.getLogger("chatpulse")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
+
+# Database file path (adjust if your repo expects a different path)
+DB_PATH = os.environ.get("CHATPULSE_DB", "chatpulse.db")
+
+# SQL schema (only the parts needed for guild config and questions)
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS guilds (
+    guild_id INTEGER PRIMARY KEY,
+    revive_channel_id INTEGER,
+    revive_role_id INTEGER,
+    revive_enabled INTEGER DEFAULT 1,
+    last_revive_ts INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_questions_guild ON questions(guild_id);
+"""
+
+# ---------- Database helpers (async, non-blocking) ----------
+
+async def init_db() -> None:
+    """Initialize the SQLite database and create tables if missing."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.executescript(_SCHEMA_SQL)
+            await db.commit()
+        logger.info("Database initialized at %s", DB_PATH)
+    except Exception:
+        logger.exception("Failed to initialize database")
+
+async def get_guild_config(guild_id: int) -> Dict[str, Any]:
+    """Return guild configuration as a dict. If missing, return defaults."""
+    default = {
+        "guild_id": guild_id,
+        "revive_channel_id": None,
+        "revive_role_id": None,
+        "revive_enabled": True,
+        "last_revive_ts": 0,
+    }
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM guilds WHERE guild_id = ?", (guild_id,))
+            row = await cur.fetchone()
+            await cur.close()
+            if row:
+                return {
+                    "guild_id": row["guild_id"],
+                    "revive_channel_id": row["revive_channel_id"],
+                    "revive_role_id": row["revive_role_id"],
+                    "revive_enabled": bool(row["revive_enabled"]),
+                    "last_revive_ts": row["last_revive_ts"],
+                }
+    except Exception:
+        logger.exception("Error fetching guild config for %s", guild_id)
+    return default
+
+async def set_guild_config(guild_id: int, **kwargs) -> None:
+    """Insert or update guild configuration. Accepts revive_channel_id, revive_role_id, revive_enabled, last_revive_ts."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Upsert pattern: try update, if no rows updated then insert
+            columns = []
+            values = []
+            for k, v in kwargs.items():
+                if k in ("revive_channel_id", "revive_role_id", "revive_enabled", "last_revive_ts"):
+                    columns.append(f"{k} = ?")
+                    values.append(int(v) if isinstance(v, bool) or isinstance(v, int) else v)
+            if not columns:
+                return
+            values.append(guild_id)
+            sql = f"UPDATE guilds SET {', '.join(columns)} WHERE guild_id = ?"
+            cur = await db.execute(sql, tuple(values))
+            if cur.rowcount == 0:
+                # Insert with defaults merged
+                cfg = await get_guild_config(guild_id)
+                cfg.update(kwargs)
+                await db.execute(
+                    "INSERT OR REPLACE INTO guilds (guild_id, revive_channel_id, revive_role_id, revive_enabled, last_revive_ts) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        guild_id,
+                        cfg.get("revive_channel_id"),
+                        cfg.get("revive_role_id"),
+                        1 if cfg.get("revive_enabled") else 0,
+                        cfg.get("last_revive_ts", 0),
+                    ),
+                )
+            await db.commit()
+    except Exception:
+        logger.exception("Error setting guild config for %s with %s", guild_id, kwargs)
+
+async def add_question(guild_id: int, author_id: int, content: str, ts: int) -> int:
+    """Add a question to the questions table. Returns inserted row id."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "INSERT INTO questions (guild_id, author_id, content, created_at) VALUES (?, ?, ?, ?)",
+                (guild_id, author_id, content, ts),
+            )
+            await db.commit()
+            rowid = cur.lastrowid
+            await cur.close()
+            return rowid
+    except Exception:
+        logger.exception("Failed to add question for guild %s", guild_id)
+        return -1
+
+async def get_questions_for_guild(guild_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+    """Return a list of recent questions for a guild."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT id, author_id, content, created_at FROM questions WHERE guild_id = ? ORDER BY created_at DESC LIMIT ?",
+                (guild_id, limit),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+            return [dict(r) for r in rows]
+    except Exception:
+        logger.exception("Failed to fetch questions for guild %s", guild_id)
+        return []
+
+async def delete_question(question_id: int) -> bool:
+    """Delete a question by id. Returns True if deleted."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("DELETE FROM questions WHERE id = ?", (question_id,))
+            await db.commit()
+            deleted = cur.rowcount > 0
+            await cur.close()
+            return deleted
+    except Exception:
+        logger.exception("Failed to delete question %s", question_id)
+        return False
+
+# ---------- Background inactivity checker ----------
+
+_INACTIVITY_CHECK_INTERVAL = 60  # seconds
+
+async def check_inactivity_loop(bot: commands.Bot):
+    """Background task that checks guilds for inactivity and triggers revive logic."""
+    await bot.wait_until_ready()
+    logger.info("Starting inactivity checker loop")
+    while not bot.is_closed():
+        try:
+            # Fetch all guilds from DB
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute("SELECT guild_id, revive_channel_id, revive_enabled, last_revive_ts FROM guilds WHERE revive_enabled = 1")
+                rows = await cur.fetchall()
+                await cur.close()
+
+            now_ts = int(asyncio.get_event_loop().time())
+            for row in rows:
+                guild_id = row["guild_id"]
+                channel_id = row["revive_channel_id"]
+                last_ts = row["last_revive_ts"] or 0
+
+                # Example inactivity threshold: 24 hours (adjust as needed)
+                INACTIVITY_THRESHOLD = 24 * 60 * 60
+
+                if not channel_id:
+                    continue
+
+                # If enough time passed, attempt to revive
+                if now_ts - last_ts >= INACTIVITY_THRESHOLD:
+                    # Schedule a revive task per guild (non-blocking)
+                    asyncio.create_task(_attempt_revive_for_guild(bot, guild_id, channel_id))
+                    # Update last_revive_ts to avoid repeated triggers until next cycle
+                    await set_guild_config(guild_id, last_revive_ts=now_ts)
+        except Exception:
+            logger.exception("Error in inactivity checker loop")
+        # Sleep between checks
+        await asyncio.sleep(_INACTIVITY_CHECK_INTERVAL)
+
+async def _attempt_revive_for_guild(bot: commands.Bot, guild_id: int, channel_id: int):
+    """Attempt to send a revive message to the configured channel for a guild."""
+    try:
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            # Bot is not in the guild or not cached; try fetching
+            try:
+                guild = await bot.fetch_guild(guild_id)
+            except Exception:
+                logger.warning("Could not fetch guild %s for revive", guild_id)
+                return
+
+        channel = guild.get_channel(channel_id) or await _fetch_channel_safe(bot, channel_id)
+        if not channel:
+            logger.warning("Revive channel %s not found for guild %s", channel_id, guild_id)
+            return
+
+        # Build a safe revive message. Keep it simple to avoid embed permission issues.
+        content = "🔔 **Revive check** — Hey! It's been a while. Drop a message to keep this channel active!"
+        try:
+            await channel.send(content)
+            logger.info("Sent revive message to guild %s channel %s", guild_id, channel_id)
+        except discord.Forbidden:
+            logger.warning("Missing permissions to send messages in channel %s for guild %s", channel_id, guild_id)
+        except discord.HTTPException:
+            logger.exception("HTTP error sending revive message to channel %s for guild %s", channel_id, guild_id)
+    except Exception:
+        logger.exception("Unhandled exception attempting revive for guild %s", guild_id)
+
+async def _fetch_channel_safe(bot: commands.Bot, channel_id: int) -> Optional[discord.abc.GuildChannel]:
+    """Try to fetch a channel by id without raising unhandled exceptions."""
+    try:
+        return await bot.fetch_channel(channel_id)
+    except Exception:
+        logger.exception("Failed to fetch channel %s", channel_id)
+        return None
+
+# ---------- Command handlers and utility commands (preserve your concepts) ----------
+
+# Example: /setup command to configure revive channel and role
+@tree.command(name="setup_revive", description="Configure revive channel and role for this server")
+@app_commands.describe(channel="Channel to post revive messages", role="Role to mention when reviving (optional)")
+async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, role: Optional[discord.Role] = None):
+    await interaction.response.defer(thinking=True)
+    guild_id = interaction.guild_id
+    if not guild_id:
+        await interaction.followup.send("This command must be used in a server.", ephemeral=True)
+        return
+
+    try:
+        await set_guild_config(guild_id, revive_channel_id=channel.id, revive_role_id=(role.id if role else None), revive_enabled=1)
+        await interaction.followup.send(f"✅ Revive configured to use {channel.mention}" + (f" and mention {role.mention}" if role else ""), ephemeral=True)
+        logger.info("Guild %s configured revive channel %s role %s", guild_id, channel.id, (role.id if role else None))
+    except Exception:
+        logger.exception("Failed to configure revive for guild %s", guild_id)
+        await interaction.followup.send("❌ Failed to save configuration. Check bot logs.", ephemeral=True)
+
+# Example: /revive_now to manually trigger a revive
+@tree.command(name="revive_now", description="Trigger a manual revive message in the configured channel")
+async def revive_now(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    guild_id = interaction.guild_id
+    if not guild_id:
+        await interaction.followup.send("This command must be used in a server.", ephemeral=True)
+        return
+
+    cfg = await get_guild_config(guild_id)
+    channel_id = cfg.get("revive_channel_id")
+    if not channel_id:
+        await interaction.followup.send("No revive channel configured. Use /setup_revive first.", ephemeral=True)
+        return
+
+    try:
+        channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
+        if not channel:
+            channel = await _fetch_channel_safe(bot, channel_id)
+        if not channel:
+            await interaction.followup.send("Configured channel not found. Check configuration.", ephemeral=True)
+            return
+
+        # Send the revive message and update last_revive_ts
+        content = "🔔 Manual revive triggered — say hi to keep the channel active!"
+        await channel.send(content)
+        await set_guild_config(guild_id, last_revive_ts=int(asyncio.get_event_loop().time()))
+        await interaction.followup.send("✅ Revive message sent.", ephemeral=True)
+    except discord.Forbidden:
+        logger.warning("Missing permission to send revive message in guild %s channel %s", guild_id, channel_id)
+        await interaction.followup.send("❌ I don't have permission to send messages in the configured channel.", ephemeral=True)
+    except Exception:
+        logger.exception("Failed to send manual revive for guild %s", guild_id)
+        await interaction.followup.send("❌ Failed to send revive message. Check bot logs.", ephemeral=True)
+
+# Example: /list_questions to show recent stored questions (keeps concept of question storage)
+@tree.command(name="list_questions", description="List recent stored questions for this server")
+async def list_questions(interaction: discord.Interaction, limit: Optional[int] = 10):
+    await interaction.response.defer(thinking=True)
+    guild_id = interaction.guild_id
+    if not guild_id:
+        await interaction.followup.send("This command must be used in a server.", ephemeral=True)
+        return
+
+    try:
+        questions = await get_questions_for_guild(guild_id, limit=limit)
+        if not questions:
+            await interaction.followup.send("No stored questions found for this server.", ephemeral=True)
+            return
+
+        # Build a compact message (avoid long embeds to prevent permission issues)
+        lines = []
+        for q in questions:
+            short = q["content"]
+            if len(short) > 120:
+                short = short[:117] + "..."
+            lines.append(f"**#{q['id']}** by <@{q['author_id']}> — {short}")
+
+        # Discord message length safety
+        message = "\n".join(lines)
+        if len(message) > 1900:
+            message = message[:1900] + "\n... (truncated)"
+        await interaction.followup.send(message, ephemeral=True)
+    except Exception:
+        logger.exception("Failed to list questions for guild %s", guild_id)
+        await interaction.followup.send("❌ Failed to fetch questions. Check bot logs.", ephemeral=True)
+
+# ---------- Graceful startup and shutdown hooks ----------
+
+# Start DB and background tasks on ready
+@bot.event
+async def on_ready():
+    # Keep any existing on_ready logic but ensure DB init and background task start
+    try:
+        # Initialize DB (idempotent)
+        await init_db()
+    except Exception:
+        logger.exception("Database init failed in on_ready")
+
+    # Start inactivity checker if not already running
+    if not hasattr(bot, "_inactivity_task") or bot._inactivity_task is None or bot._inactivity_task.done():
+        bot._inactivity_task = bot.loop.create_task(check_inactivity_loop(bot))
+        logger.info("Inactivity checker task started")
+
+    # Sync commands if needed (safe to call repeatedly)
+    try:
+        await tree.sync()
+        logger.info("Slash commands synced on ready")
+    except Exception:
+        logger.exception("Failed to sync commands on ready")
+
+    logger.info("Bot ready: %s (ID: %s)", bot.user, bot.user.id)
+
+# Ensure background tasks are cancelled on shutdown
+async def _shutdown_tasks():
+    # Cancel inactivity task
+    try:
+        if hasattr(bot, "_inactivity_task") and bot._inactivity_task:
+            bot._inactivity_task.cancel()
+            await asyncio.sleep(0)  # yield to allow cancellation
+    except Exception:
+        logger.exception("Error while cancelling background tasks")
+
+# Hook into signal/exit to close DB and tasks
+def _register_shutdown_handlers():
+    loop = asyncio.get_event_loop()
+
+    async def _cleanup():
+        logger.info("Cleaning up before shutdown")
+        await _shutdown_tasks()
+        # Nothing else to close for aiosqlite since we open/close per operation
+        logger.info("Cleanup complete")
+
+    for sig in ("SIGINT", "SIGTERM"):
+        try:
+            loop.add_signal_handler(getattr(signal, sig), lambda: asyncio.create_task(_cleanup()))
+        except Exception:
+            # Not all platforms support add_signal_handler (e.g., Windows in some contexts)
+            pass
+
+# Register shutdown handlers (best-effort)
+try:
+    import signal
+    _register_shutdown_handlers()
+except Exception:
+    logger.debug("Signal handlers not registered (platform may not support them)")
+
+# ---------- End of database and remaining handlers block ----------
+# After pasting this block, restart your bot. Watch the console logs for logger.exception entries
+# if anything still fails. This block avoids blocking I/O, adds robust error handling, and
+# preserves your original bot concepts (revive config, question storage, manual revive).
+
+
+
+
+
+
