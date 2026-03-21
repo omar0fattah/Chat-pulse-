@@ -5,11 +5,10 @@ from discord import app_commands
 import asyncio
 import aiosqlite
 import random
-from typing import Optional
 
 # ==================== CONFIG ====================
 TOKEN = os.environ.get('TOKEN') or os.environ.get('DISCORD_BOT_TOKEN')
-DB_PATH = 'chatpulse_new.db'
+DB_PATH = 'chatpulse.db'
 
 # ==================== BOT SETUP ====================
 intents = discord.Intents.default()
@@ -84,7 +83,6 @@ async def seed_default_questions(guild_id: int):
                 )
         await db.commit()
 
-
 # ==================== HELPERS ====================
 async def add_category(guild_id: int, name: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -134,7 +132,6 @@ async def get_categories(guild_id: int):
         rows = await cur.fetchall()
         return [r["name"] for r in rows]
 
-
 # ==================== BACKGROUND LOOP ====================
 async def check_inactivity_loop(bot: commands.Bot):
     await bot.wait_until_ready()
@@ -174,11 +171,21 @@ async def add_category_cmd(interaction: discord.Interaction, name: str):
     await interaction.response.send_message(f"✅ Category '{name}' added.", ephemeral=True)
 
 @tree.command(name="add_question", description="Add a question to a category")
+@app_commands.autocomplete(category=lambda interaction, current: [
+    app_commands.Choice(name=name, value=name)
+    for name in asyncio.run(get_categories(interaction.guild_id))
+    if current.lower() in name.lower()
+])
 async def add_question_cmd(interaction: discord.Interaction, category: str, content: str):
     await add_question(interaction.guild_id, category, interaction.user.id, content, int(asyncio.get_event_loop().time()))
     await interaction.response.send_message(f"✅ Question added to '{category}'.", ephemeral=True)
 
 @tree.command(name="list_questions", description="List questions in a category")
+@app_commands.autocomplete(category=lambda interaction, current: [
+    app_commands.Choice(name=name, value=name)
+    for name in asyncio.run(get_categories(interaction.guild_id))
+    if current.lower() in name.lower()
+])
 async def list_questions_cmd(interaction: discord.Interaction, category: str):
     qs = await get_questions(interaction.guild_id, category)
     if not qs:
@@ -187,6 +194,11 @@ async def list_questions_cmd(interaction: discord.Interaction, category: str):
         await interaction.response.send_message("\n".join([f"- {q}" for q in qs[:10]]), ephemeral=True)
 
 @tree.command(name="setup_revive", description="Set up revive for a channel")
+@app_commands.autocomplete(category=lambda interaction, current: [
+    app_commands.Choice(name=name, value=name)
+    for name in asyncio.run(get_categories(interaction.guild_id))
+    if current.lower() in name.lower()
+])
 async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, category: str, hours: int):
     threshold = hours * 3600
     await add_revive_channel(interaction.guild_id, channel.id, category, threshold)
@@ -198,52 +210,4 @@ async def setup_revive(interaction: discord.Interaction, channel: discord.TextCh
 @tree.command(name="remove_revive", description="Remove revive from a channel")
 async def remove_revive_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
     await remove_revive_channel(interaction.guild_id, channel.id)
-    await interaction.response.send_message(f"❌ Revive removed from {channel.mention}.", ephemeral=True)
-
-@tree.command(name="revive_now", description="Trigger a manual revive")
-async def revive_now(interaction: discord.Interaction, channel: discord.TextChannel):
-    qs = await get_questions(interaction.guild_id, "general")
-    if qs:
-        q = random.choice(qs)
-        await channel.send(f"💡 {q}")
-        await interaction.response.send_message("✅ Revive message sent.", ephemeral=True)
-    else:
-        await interaction.response.send_message("No questions available in 'general'.", ephemeral=True)
-
-
-@tree.command(name="status", description="Show bot status")
-async def status(interaction: discord.Interaction):
-    channels = await get_revive_channels(interaction.guild_id)
-    if not channels:
-        await interaction.response.send_message("No revive channels configured.", ephemeral=True)
-    else:
-        lines = []
-        for ch in channels:
-            channel = interaction.guild.get_channel(ch["channel_id"])
-            lines.append(
-                f"{channel.mention} → Category: {ch['category']}, Threshold: {ch['inactivity_threshold']//3600}h"
-            )
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
-
-# ==================== EVENTS ====================
-@bot.event
-async def on_ready():
-    await init_db()
-    for guild in bot.guilds:
-        await seed_default_questions(guild.id)
-    bot.loop.create_task(check_inactivity_loop(bot))
-    await tree.sync()
-    print(f"Bot ready: {bot.user}")
-
-
-# ==================== RUN ====================
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    print("❌ No bot token found in environment variables.")
-
-
-
-
-
-
+    await
