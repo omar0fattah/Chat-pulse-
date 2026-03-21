@@ -168,6 +168,25 @@ async def check_inactivity_loop(bot: commands.Bot):
         await asyncio.sleep(60)
 
 # ==================== SLASH COMMANDS ====================
+@tree.command(name="help", description="Show all available commands and what they do")
+async def help_cmd(interaction: discord.Interaction):
+    help_text = """
+📖 **ChatPulse Bot Commands**
+
+🔹 `/ping` — Test if the bot responds.
+🔹 `/add_category <name>` — Add a new question category. (Admins only)
+🔹 `/add_question <category> <content>` — Add a question to a category. (Admins only)
+🔹 `/delete_question <category> <content>` — Delete a question from a category. (Admins only)
+🔹 `/list_questions <category>` — List up to 10 questions in a category.
+🔹 `/setup_revive <channel> <category> <hours>` — Configure revive logic for a channel. (Admins only)
+🔹 `/remove_revive <channel>` — Remove revive logic from a channel. (Admins only)
+🔹 `/revive_now <channel> [category]` — Trigger a manual revive message. (Admins only)
+🔹 `/status` — Show revive channel status and thresholds.
+🔹 `/help` — Show this help message.
+"""
+    await interaction.response.send_message(help_text, ephemeral=True)
+
+
 @tree.command(name="ping", description="Test if bot responds")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
