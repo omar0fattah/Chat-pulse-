@@ -342,7 +342,7 @@ async def list_questions_cmd(interaction: discord.Interaction, category: str):
     if not qs:
         await interaction.response.send_message("No questions found.", ephemeral=True)
     else:
-        await interaction.response.send_message("\n".join([f"- {q}" for q in qs[:100]]), ephemeral=True)
+        await interaction.response.send_message("\n".join([f"- {q}" for q in qs[:50]]), ephemeral=True)
 
 @tree.command(name="setup_revive", description="Set up revive for a channel")
 @app_commands.default_permissions(manage_guild=True)
