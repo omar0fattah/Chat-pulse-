@@ -190,11 +190,19 @@ async def add_question_cmd(interaction: discord.Interaction, category: str, cont
 @app_commands.autocomplete(category=category_autocomplete)
 async def delete_question_cmd(interaction: discord.Interaction, category: str, content: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        cur = await db.execute(
             "DELETE FROM questions WHERE guild_id = ? AND category = ? AND content = ?",
             (interaction.guild_id, category, content)
         )
+        # 👇 This is the check you add
+        if cur.rowcount == 0:
+            await interaction.response.send_message(
+                f"⚠️ No matching question found in '{category}'.",
+                ephemeral=True
+            )
+            return
         await db.commit()
+
     await interaction.response.send_message(
         f"❌ Question '{content}' deleted from '{category}'.",
         ephemeral=True
