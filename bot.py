@@ -9,7 +9,7 @@ from typing import Optional
 
 # ==================== CONFIG ====================
 TOKEN = os.environ.get('TOKEN') or os.environ.get('DISCORD_BOT_TOKEN')
-DB_PATH = 'chatpulse.db'
+DB_PATH = 'chatpulse_new.db'
 
 # ==================== BOT SETUP ====================
 intents = discord.Intents.default()
