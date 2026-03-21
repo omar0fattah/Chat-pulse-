@@ -208,5 +208,4 @@ async def status(interaction: discord.Interaction):
     else:
         lines = []
         for ch in channels:
-            channel = interaction.guild.get_channel(ch["channel_id"])
-            lines.append(f"{channel.mention} → Category
+            channel = interaction
