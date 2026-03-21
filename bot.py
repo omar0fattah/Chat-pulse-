@@ -126,6 +126,15 @@ async def get_revive_channels(guild_id: int):
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+# ==================== CATEGORY HELPER ====================
+async def get_categories(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT name FROM categories WHERE guild_id = ?", (guild_id,))
+        rows = await cur.fetchall()
+        return [r["name"] for r in rows]
+
+
 # ==================== BACKGROUND LOOP ====================
 async def check_inactivity_loop(bot: commands.Bot):
     await bot.wait_until_ready()
