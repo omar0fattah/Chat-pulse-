@@ -208,4 +208,28 @@ async def status(interaction: discord.Interaction):
     else:
         lines = []
         for ch in channels:
-            channel = interaction
+            channel = interaction.guild.get_channel(ch["channel_id"])
+            lines.append(
+                f"{channel.mention} → Category: {ch['category']}, Threshold: {ch['inactivity_threshold']//3600}h"
+            )
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+# ==================== EVENTS ====================
+@bot.event
+async def on_ready():
+    await init_db()
+    await seed_default_questions()
+    bot.loop.create_task(check_inactivity_loop(bot))
+    await tree.sync()
+    print(f"Bot ready: {bot.user}")
+
+# ==================== RUN ====================
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("❌ No bot token found in environment variables.")
+
+
+
+
+
