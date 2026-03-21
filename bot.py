@@ -200,9 +200,6 @@ async def revive_now(interaction: discord.Interaction, channel: discord.TextChan
     else:
         await interaction.response.send_message("No questions available in 'general'.", ephemeral=True)
 
-tion} → Category: {ch['category']}, Threshold: {ch['inactivity_threshold']//3600}h"
-            )
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 @tree.command(name="status", description="Show bot status")
 async def status(interaction: discord.Interaction):
