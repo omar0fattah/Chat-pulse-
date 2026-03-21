@@ -185,6 +185,22 @@ async def add_question_cmd(interaction: discord.Interaction, category: str, cont
     await add_question(interaction.guild_id, category, interaction.user.id, content, int(asyncio.get_event_loop().time()))
     await interaction.response.send_message(f"✅ Question added to '{category}'.", ephemeral=True)
 
+@tree.command(name="delete_question", description="Delete a question from a category")
+@app_commands.default_permissions(manage_guild=True)  # Only admins/mods can delete
+@app_commands.autocomplete(category=category_autocomplete)
+async def delete_question_cmd(interaction: discord.Interaction, category: str, content: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM questions WHERE guild_id = ? AND category = ? AND content = ?",
+            (interaction.guild_id, category, content)
+        )
+        await db.commit()
+    await interaction.response.send_message(
+        f"❌ Question '{content}' deleted from '{category}'.",
+        ephemeral=True
+    )
+
+
 @tree.command(name="list_questions", description="List questions in a category")
 @app_commands.autocomplete(category=category_autocomplete)
 async def list_questions_cmd(interaction: discord.Interaction, category: str):
