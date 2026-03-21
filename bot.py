@@ -132,7 +132,6 @@ async def get_categories(guild_id: int):
         rows = await cur.fetchall()
         return [r["name"] for r in rows]
 
-# Proper autocomplete callback
 async def category_autocomplete(interaction: discord.Interaction, current: str):
     names = await get_categories(interaction.guild_id)
     return [
@@ -208,5 +207,4 @@ async def remove_revive_cmd(interaction: discord.Interaction, channel: discord.T
     await remove_revive_channel(interaction.guild_id, channel.id)
     await interaction.response.send_message(f"❌ Revive removed from {channel.mention}.", ephemeral=True)
 
-@tree.command(name="revive_now", description="Trigger a manual revive")
-@app_commands.autocomplete(category=category_autocomplete)
+@
