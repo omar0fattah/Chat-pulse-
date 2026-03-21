@@ -220,10 +220,12 @@ async def status(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     await init_db()
-    await seed_default_questions()
+    for guild in bot.guilds:
+        await seed_default_questions(guild.id)
     bot.loop.create_task(check_inactivity_loop(bot))
     await tree.sync()
     print(f"Bot ready: {bot.user}")
+
 
 # ==================== RUN ====================
 if TOKEN:
