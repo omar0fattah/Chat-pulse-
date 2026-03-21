@@ -73,16 +73,17 @@ async def init_db():
         await db.executescript(_SCHEMA_SQL)
         await db.commit()
 
-async def seed_default_questions():
+async def seed_default_questions(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         for category, questions in DEFAULT_QUESTIONS.items():
-            await db.execute("INSERT OR IGNORE INTO categories (guild_id, name) VALUES (?, ?)", (0, category))
+            await db.execute("INSERT OR IGNORE INTO categories (guild_id, name) VALUES (?, ?)", (guild_id, category))
             for q in questions:
                 await db.execute(
                     "INSERT INTO questions (guild_id, category, author_id, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (0, category, 0, q, int(asyncio.get_event_loop().time()))
+                    (guild_id, category, 0, q, int(asyncio.get_event_loop().time()))
                 )
         await db.commit()
+
 
 # ==================== HELPERS ====================
 async def add_category(guild_id: int, name: str):
