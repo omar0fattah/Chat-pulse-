@@ -173,11 +173,13 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
 
 @tree.command(name="add_category", description="Add a new question category")
+@app_commands.default_permissions(manage_guild=True)
 async def add_category_cmd(interaction: discord.Interaction, name: str):
     await add_category(interaction.guild_id, name)
     await interaction.response.send_message(f"✅ Category '{name}' added.", ephemeral=True)
 
 @tree.command(name="add_question", description="Add a question to a category")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
 async def add_question_cmd(interaction: discord.Interaction, category: str, content: str):
     await add_question(interaction.guild_id, category, interaction.user.id, content, int(asyncio.get_event_loop().time()))
@@ -193,6 +195,7 @@ async def list_questions_cmd(interaction: discord.Interaction, category: str):
         await interaction.response.send_message("\n".join([f"- {q}" for q in qs[:10]]), ephemeral=True)
 
 @tree.command(name="setup_revive", description="Set up revive for a channel")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
 async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, category: str, hours: int):
     threshold = hours * 3600
@@ -203,11 +206,13 @@ async def setup_revive(interaction: discord.Interaction, channel: discord.TextCh
     )
 
 @tree.command(name="remove_revive", description="Remove revive from a channel")
+@app_commands.default_permissions(manage_guild=True)
 async def remove_revive_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
     await remove_revive_channel(interaction.guild_id, channel.id)
     await interaction.response.send_message(f"❌ Revive removed from {channel.mention}.", ephemeral=True)
 
 @tree.command(name="revive_now", description="Trigger a manual revive")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
 async def revive_now(interaction: discord.Interaction, channel: discord.TextChannel, category: str = "general"):
     qs = await get_questions(interaction.guild_id, category)
