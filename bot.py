@@ -16,8 +16,8 @@ revive_settings = {}  # {guild_id: {"channel": channel_id, "delay": seconds}}
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    guild = discord.Object(id=1413551789034307657)  # paste your server ID here
-    await tree.sync(guild=guild)  # sync only to that guild for instant updates
+    guild = discord.Object(id=1413551789034307657)  # your server ID
+    await tree.sync(guild=guild)  # instant sync in that guild
     revive_loop.start()
 
 
