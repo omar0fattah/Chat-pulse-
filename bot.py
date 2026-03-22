@@ -1,44 +1,4 @@
-
-
-Deployments
-Variables
-Metrics
-Settings
-Unexposed service
-us-east4-eqdc4a
-1 Replica
-Chat-pulse-
-/
-Active
-Mar 22, 2026, 1:36 AM UTC
-Filter and search logs
-You reached the start of the range
-Mar 22, 2026, 1:36 AM
-Starting Container
-[2026-03-22 01:37:38] [INFO    ] discord.client: logging in using static token
-[2026-03-22 01:37:38] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: 3382e538515782070c01e48b541f69af).
-Bot ready: Chat pulse#6667
-[2026-03-22 01:40:56] [ERROR   ] discord.app_commands.tree: Ignoring exception in command 'setup_revive'
-Traceback (most recent call last):
-  File "/opt/venv/lib/python3.12/site-packages/discord/app_commands/tree.py", line 1302, in _call
-    await command._invoke_with_namespace(interaction, namespace)
-  File "/opt/venv/lib/python3.12/site-packages/discord/app_commands/commands.py", line 883, in _invoke_with_namespace
-    transformed_values = await self._transform_arguments(interaction, namespace)
-                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/venv/lib/python3.12/site-packages/discord/app_commands/commands.py", line 849, in _transform_arguments
-    transformed_values[param.name] = await param.transform(interaction, value)
-                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/venv/lib/python3.12/site-packages/discord/app_commands/transformers.py", line 184, in transform
-    return await maybe_coroutine(self._annotation.transform, interaction, value)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/venv/lib/python3.12/site-packages/discord/utils.py", line 713, in maybe_coroutine
-    return await value
-           ^^^^^^^^^^^
-  File "/opt/venv/lib/python3.12/site-packages/discord/app_commands/transformers.py", line 664, in transform
-    raise TransformerError(value, AppCommandOptionType.channel, self)
-discord.app_commands.errors.TransformerError: Failed to convert 🧩┃general-sfw to TextChannel
-
-Chat-pulse-import os
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
