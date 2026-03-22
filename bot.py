@@ -1,7 +1,7 @@
-# chatpulse_final.py
-# Full ChatPulse bot — complete, ready-to-paste
+# chatpulse_complete.py
+# Complete ChatPulse bot — full, self-contained, ready to paste and run.
 # Requirements: discord.py 2.x, aiosqlite
-# Set DISCORD_BOT_TOKEN (or TOKEN) in environment before running.
+# Set DISCORD_BOT_TOKEN (or TOKEN) environment variable before running.
 
 import os
 import re
@@ -537,6 +537,8 @@ async def help_cmd(interaction: discord.Interaction):
         "🔹 `/status` — Show revive channel status and thresholds.\n"
         "🔹 `/reset_categories` — Re-add default categories/questions for this server. (Admins only)\n"
         "🔹 `/debug_categories` — Show categories currently in the DB for this server. (Admins only)\n"
+        "🔹 `/force_sync` — (Dev) Force sync commands to guild or globally. (Admins only)\n"
+        "🔹 `/inspect_setup_revive` — (Dev) Inspect what Discord sends for setup_revive. (Admins only)\n"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
@@ -781,6 +783,60 @@ async def status(interaction: discord.Interaction):
     except Exception:
         logger.exception("status failed")
         await interaction.followup.send("❌ Failed to fetch status.", ephemeral=True)
+
+# ==================== DEV / DEBUG COMMANDS ====================
+@tree.command(name="force_sync", description="(Dev) Force sync commands to this guild or globally")
+@app_commands.default_permissions(administrator=True)
+async def force_sync(interaction: discord.Interaction, guild_id: Optional[int] = None):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if guild_id:
+            await tree.sync(guild=discord.Object(id=guild_id))
+            await interaction.followup.send(f"✅ Synced commands to guild {guild_id}.", ephemeral=True)
+        else:
+            await tree.sync()
+            await interaction.followup.send("✅ Synced commands globally.", ephemeral=True)
+    except Exception as e:
+        logger.exception("force_sync failed")
+        await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
+
+@tree.command(name="inspect_setup_revive", description="(Dev) Inspect what Discord sends for setup_revive")
+@app_commands.default_permissions(administrator=True)
+async def inspect_setup_revive(
+    interaction: discord.Interaction,
+    channel_picker: Optional[discord.abc.GuildChannel] = None,
+    channel: Optional[str] = None,
+    category: Optional[str] = None,
+    hours: Optional[int] = None
+):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        logger.info("inspect_setup_revive called by %s in guild %s", interaction.user.id, interaction.guild_id)
+        logger.info("channel_picker: %r", channel_picker)
+        logger.info("channel (typed): %r", channel)
+        logger.info("category: %r", category)
+        logger.info("hours: %r", hours)
+        parts = [
+            f"channel_picker: {repr(channel_picker)}",
+            f"channel (typed): {repr(channel)}",
+            f"category: {repr(category)}",
+            f"hours: {repr(hours)}"
+        ]
+        await interaction.followup.send("\n".join(parts), ephemeral=True)
+    except Exception:
+        logger.exception("inspect_setup_revive failed")
+        await interaction.followup.send("❌ Failed to inspect inputs. Check logs.", ephemeral=True)
+
+@tree.command(name="db_list_categories", description="(Dev) Show categories stored in DB for this guild")
+@app_commands.default_permissions(administrator=True)
+async def db_list_categories(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        cats = await get_categories(interaction.guild_id)
+        await interaction.followup.send(f"DB categories ({len(cats)}): {', '.join(cats) if cats else 'None'}", ephemeral=True)
+    except Exception:
+        logger.exception("db_list_categories failed")
+        await interaction.followup.send("❌ Failed to read DB. Check logs.", ephemeral=True)
 
 # ==================== EVENTS ====================
 @bot.event
