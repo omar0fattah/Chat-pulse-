@@ -654,6 +654,13 @@ async def list_questions_cmd(interaction: discord.Interaction, category: str):
     else:
         await interaction.response.send_message("\n".join([f"- {q}" for q in qs[:50]]), ephemeral=True)
 
+@tree.command(name="reset_categories", description="Reseed default categories/questions for this server")
+@app_commands.default_permissions(manage_guild=True)
+async def reset_categories(interaction: discord.Interaction):
+    await seed_default_questions(interaction.guild_id)
+    await interaction.response.send_message("✅ Categories have been reset and default questions re-added.", ephemeral=True)
+
+
 @tree.command(name="setup_revive", description="Set up revive for a channel")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
