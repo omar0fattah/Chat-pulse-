@@ -4,7 +4,7 @@ from discord.ext import tasks
 
 intents = discord.Intents.default()
 intents.messages = True
-client = discord.Client(intents=intents)
+intents.message_content = True
 
 @client.event
 async def on_ready():
