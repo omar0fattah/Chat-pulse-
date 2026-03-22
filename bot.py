@@ -1,5 +1,8 @@
-# chatpulse_complete.py
-# Complete ChatPulse bot — full, self-contained, ready to paste and run.
+# chatpulse_final_stable.py
+# Complete ChatPulse bot — final stable edition.
+# - Uses string-based channel resolution for main commands to avoid TransformerError.
+# - Provides separate picker-based commands for users who prefer the UI picker.
+# - Includes all default questions, DB schema, background revive loop, and admin/debug utilities.
 # Requirements: discord.py 2.x, aiosqlite
 # Set DISCORD_BOT_TOKEN (or TOKEN) environment variable before running.
 
@@ -355,7 +358,7 @@ DEFAULT_QUESTIONS = {
     ]
 }
 
-# ==================== DATABASE SCHEMA ====================
+# ==================== DB SCHEMA ====================
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -460,13 +463,22 @@ async def category_autocomplete(interaction: discord.Interaction, current: str):
         for name in names if current.lower() in name.lower()
     ]
 
-# ==================== CHANNEL RESOLUTION ====================
+# ==================== CHANNEL RESOLUTION (STRING-BASED) ====================
 CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
 
-async def resolve_text_channel(guild: Optional[discord.Guild], raw: str) -> Optional[discord.TextChannel]:
+async def resolve_text_channel_by_string(guild: Optional[discord.Guild], raw: str) -> Optional[discord.TextChannel]:
+    """
+    Resolve a channel from a typed string. Accepts:
+    - channel mention: <#123456789012345678>
+    - numeric ID: 123456789012345678
+    - exact name: general-sfw
+    - partial name: general
+    This function intentionally avoids relying on app_commands transformers to prevent TransformerError.
+    """
     if not guild or not raw:
         return None
     raw = raw.strip()
+    # mention like <#123>
     m = CHANNEL_MENTION_RE.match(raw)
     if m:
         try:
@@ -475,15 +487,18 @@ async def resolve_text_channel(guild: Optional[discord.Guild], raw: str) -> Opti
             return ch if isinstance(ch, discord.TextChannel) else None
         except Exception:
             return None
+    # numeric id
     if raw.isdigit():
         try:
             ch = guild.get_channel(int(raw))
             return ch if isinstance(ch, discord.TextChannel) else None
         except Exception:
             return None
+    # exact name match
     for ch in guild.text_channels:
         if ch.name.lower() == raw.lower():
             return ch
+    # partial match fallback
     raw_l = raw.lower()
     for ch in guild.text_channels:
         if raw_l in ch.name.lower():
@@ -531,14 +546,15 @@ async def help_cmd(interaction: discord.Interaction):
         "🔹 `/add_question <category> <content>` — Add a question to a category. (Admins only)\n"
         "🔹 `/delete_question <category> <content>` — Delete a question from a category. (Admins only)\n"
         "🔹 `/list_questions <category>` — List questions in a category.\n"
-        "🔹 `/setup_revive` — Configure revive logic for a channel (picker or typed input). (Admins only)\n"
-        "🔹 `/remove_revive` — Remove revive logic from a channel. (Admins only)\n"
-        "🔹 `/revive_now` — Trigger a manual revive message. (Admins only)\n"
+        "🔹 `/setup_revive <channel>` — Configure revive using a typed channel (mention/ID/name). (Admins only)\n"
+        "🔹 `/setup_revive_picker <channel_picker>` — Configure revive using the channel picker. (Admins only)\n"
+        "🔹 `/remove_revive <channel>` — Remove revive using typed channel. (Admins only)\n"
+        "🔹 `/remove_revive_picker <channel_picker>` — Remove revive using the picker. (Admins only)\n"
+        "🔹 `/revive_now <channel>` — Trigger a manual revive using typed channel. (Admins only)\n"
+        "🔹 `/revive_now_picker <channel_picker>` — Trigger a manual revive using the picker. (Admins only)\n"
         "🔹 `/status` — Show revive channel status and thresholds.\n"
         "🔹 `/reset_categories` — Re-add default categories/questions for this server. (Admins only)\n"
         "🔹 `/debug_categories` — Show categories currently in the DB for this server. (Admins only)\n"
-        "🔹 `/force_sync` — (Dev) Force sync commands to guild or globally. (Admins only)\n"
-        "🔹 `/inspect_setup_revive` — (Dev) Inspect what Discord sends for setup_revive. (Admins only)\n"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
@@ -631,49 +647,25 @@ async def debug_categories(interaction: discord.Interaction):
         logger.exception("debug_categories failed")
         await interaction.followup.send("❌ Failed to fetch categories.", ephemeral=True)
 
-# ----------------- setup_revive (picker + typed input) -----------------
-@tree.command(name="setup_revive", description="Set up revive for a channel (picker or typed input)")
+# ----------------- setup_revive (STRING) -----------------
+@tree.command(name="setup_revive", description="Set up revive using a typed channel (mention, ID, or name)")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
-@app_commands.describe(
-    channel_picker="Pick a text channel (recommended)",
-    channel="Or type a channel mention, ID, or name (optional)",
-    category="Question category",
-    hours="Inactivity hours before revive"
-)
-async def setup_revive(
-    interaction: discord.Interaction,
-    channel_picker: Optional[discord.abc.GuildChannel] = None,
-    channel: Optional[str] = None,
-    category: str = "general",
-    hours: int = 1
-):
+async def setup_revive(interaction: discord.Interaction, channel: str, category: str = "general", hours: int = 1):
+    """
+    This command intentionally uses a string 'channel' parameter to avoid app_commands transformer errors.
+    Use mentions like <#ID>, numeric IDs, or channel names.
+    """
     await interaction.response.defer(ephemeral=True)
     try:
-        ch = None
-        if channel_picker is not None:
-            if isinstance(channel_picker, discord.TextChannel):
-                ch = channel_picker
-            else:
-                await interaction.followup.send("⚠️ Please pick a normal text channel (not a forum, category, or voice channel).", ephemeral=True)
-                return
-        elif channel:
-            ch = await resolve_text_channel(interaction.guild, channel)
-            if not ch:
-                await interaction.followup.send(
-                    "⚠️ Could not resolve that channel. Use the channel picker, mention the channel like <#ID>, or provide exact name/ID.",
-                    ephemeral=True
-                )
-                return
-        else:
-            await interaction.followup.send("⚠️ You must provide a channel (use the picker or type a channel name/ID).", ephemeral=True)
+        ch = await resolve_text_channel_by_string(interaction.guild, channel)
+        if not ch:
+            await interaction.followup.send("⚠️ Could not resolve that channel. Use a mention like <#ID>, the numeric ID, or exact channel name.", ephemeral=True)
             return
-
         cats = await get_categories(interaction.guild_id)
         if category not in cats:
             await interaction.followup.send(f"⚠️ Category '{category}' not found. Add it with /add_category or run /reset_categories.", ephemeral=True)
             return
-
         threshold = max(60, hours * 3600)
         await add_revive_channel(interaction.guild_id, ch.id, category, threshold)
         await interaction.followup.send(f"✅ Revive set for {ch.mention} with category '{category}' after {hours} hour(s).", ephemeral=True)
@@ -681,75 +673,65 @@ async def setup_revive(
         logger.exception("setup_revive failed")
         await interaction.followup.send("❌ Failed to set revive — check the bot logs.", ephemeral=True)
 
-# ----------------- remove_revive (picker + typed input) -----------------
-@tree.command(name="remove_revive", description="Remove revive from a channel (picker or typed input)")
+# ----------------- setup_revive_picker (PICKER) -----------------
+@tree.command(name="setup_revive_picker", description="Set up revive using the channel picker (recommended)")
 @app_commands.default_permissions(manage_guild=True)
-@app_commands.describe(
-    channel_picker="Pick a text channel (recommended)",
-    channel="Or type a channel mention, ID, or name (optional)"
-)
-async def remove_revive_cmd(
-    interaction: discord.Interaction,
-    channel_picker: Optional[discord.abc.GuildChannel] = None,
-    channel: Optional[str] = None
-):
+@app_commands.autocomplete(category=category_autocomplete)
+async def setup_revive_picker(interaction: discord.Interaction, channel_picker: discord.TextChannel, category: str = "general", hours: int = 1):
     await interaction.response.defer(ephemeral=True)
     try:
-        ch = None
-        if channel_picker is not None:
-            if isinstance(channel_picker, discord.TextChannel):
-                ch = channel_picker
-            else:
-                await interaction.followup.send("⚠️ Please pick a normal text channel.", ephemeral=True)
-                return
-        elif channel:
-            ch = await resolve_text_channel(interaction.guild, channel)
-            if not ch:
-                await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
-                return
-        else:
-            await interaction.followup.send("⚠️ You must provide a channel (use the picker or type a channel name/ID).", ephemeral=True)
+        ch = channel_picker
+        cats = await get_categories(interaction.guild_id)
+        if category not in cats:
+            await interaction.followup.send(f"⚠️ Category '{category}' not found. Add it with /add_category or run /reset_categories.", ephemeral=True)
             return
+        threshold = max(60, hours * 3600)
+        await add_revive_channel(interaction.guild_id, ch.id, category, threshold)
+        await interaction.followup.send(f"✅ Revive set for {ch.mention} with category '{category}' after {hours} hour(s).", ephemeral=True)
+    except Exception:
+        logger.exception("setup_revive_picker failed")
+        await interaction.followup.send("❌ Failed to set revive — check the bot logs.", ephemeral=True)
 
+# ----------------- remove_revive (STRING) -----------------
+@tree.command(name="remove_revive", description="Remove revive using a typed channel (mention, ID, or name)")
+@app_commands.default_permissions(manage_guild=True)
+async def remove_revive(interaction: discord.Interaction, channel: str):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        ch = await resolve_text_channel_by_string(interaction.guild, channel)
+        if not ch:
+            await interaction.followup.send("⚠️ Could not resolve that channel. Use a mention like <#ID>, the numeric ID, or exact channel name.", ephemeral=True)
+            return
         await remove_revive_channel(interaction.guild_id, ch.id)
         await interaction.followup.send(f"❌ Revive removed from {ch.mention}.", ephemeral=True)
     except Exception:
         logger.exception("remove_revive failed")
         await interaction.followup.send("❌ Failed to remove revive — check the bot logs.", ephemeral=True)
 
-# ----------------- revive_now (picker + typed input) -----------------
-@tree.command(name="revive_now", description="Trigger a manual revive (picker or typed input)")
+# ----------------- remove_revive_picker (PICKER) -----------------
+@tree.command(name="remove_revive_picker", description="Remove revive using the channel picker")
 @app_commands.default_permissions(manage_guild=True)
-@app_commands.autocomplete(category=category_autocomplete)
-@app_commands.describe(
-    channel_picker="Pick a text channel (recommended)",
-    channel="Or type a channel mention, ID, or name (optional)",
-    category="Question category"
-)
-async def revive_now(
-    interaction: discord.Interaction,
-    channel_picker: Optional[discord.abc.GuildChannel] = None,
-    channel: Optional[str] = None,
-    category: str = "general"
-):
+async def remove_revive_picker(interaction: discord.Interaction, channel_picker: discord.TextChannel):
     await interaction.response.defer(ephemeral=True)
     try:
-        ch = None
-        if channel_picker is not None:
-            if isinstance(channel_picker, discord.TextChannel):
-                ch = channel_picker
-            else:
-                await interaction.followup.send("⚠️ Please pick a normal text channel.", ephemeral=True)
-                return
-        elif channel:
-            ch = await resolve_text_channel(interaction.guild, channel)
-            if not ch:
-                await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
-                return
-        else:
-            await interaction.followup.send("⚠️ You must provide a channel (use the picker or type a channel name/ID).", ephemeral=True)
-            return
+        ch = channel_picker
+        await remove_revive_channel(interaction.guild_id, ch.id)
+        await interaction.followup.send(f"❌ Revive removed from {ch.mention}.", ephemeral=True)
+    except Exception:
+        logger.exception("remove_revive_picker failed")
+        await interaction.followup.send("❌ Failed to remove revive — check the bot logs.", ephemeral=True)
 
+# ----------------- revive_now (STRING) -----------------
+@tree.command(name="revive_now", description="Trigger a manual revive using a typed channel (mention, ID, or name)")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.autocomplete(category=category_autocomplete)
+async def revive_now(interaction: discord.Interaction, channel: str, category: str = "general"):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        ch = await resolve_text_channel_by_string(interaction.guild, channel)
+        if not ch:
+            await interaction.followup.send("⚠️ Could not resolve that channel. Use a mention like <#ID>, the numeric ID, or exact channel name.", ephemeral=True)
+            return
         qs = await get_questions(interaction.guild_id, category)
         if not qs:
             await interaction.followup.send(f"No questions available in '{category}'.", ephemeral=True)
@@ -759,6 +741,25 @@ async def revive_now(
         await interaction.followup.send("✅ Revive message sent.", ephemeral=True)
     except Exception:
         logger.exception("revive_now failed")
+        await interaction.followup.send("❌ Failed to send revive — check the bot logs.", ephemeral=True)
+
+# ----------------- revive_now_picker (PICKER) -----------------
+@tree.command(name="revive_now_picker", description="Trigger a manual revive using the channel picker")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.autocomplete(category=category_autocomplete)
+async def revive_now_picker(interaction: discord.Interaction, channel_picker: discord.TextChannel, category: str = "general"):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        ch = channel_picker
+        qs = await get_questions(interaction.guild_id, category)
+        if not qs:
+            await interaction.followup.send(f"No questions available in '{category}'.", ephemeral=True)
+            return
+        q = random.choice(qs)
+        await ch.send(f"💡 {q}")
+        await interaction.followup.send("✅ Revive message sent.", ephemeral=True)
+    except Exception:
+        logger.exception("revive_now_picker failed")
         await interaction.followup.send("❌ Failed to send revive — check the bot logs.", ephemeral=True)
 
 @tree.command(name="status", description="Show bot status")
@@ -783,60 +784,6 @@ async def status(interaction: discord.Interaction):
     except Exception:
         logger.exception("status failed")
         await interaction.followup.send("❌ Failed to fetch status.", ephemeral=True)
-
-# ==================== DEV / DEBUG COMMANDS ====================
-@tree.command(name="force_sync", description="(Dev) Force sync commands to this guild or globally")
-@app_commands.default_permissions(administrator=True)
-async def force_sync(interaction: discord.Interaction, guild_id: Optional[int] = None):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        if guild_id:
-            await tree.sync(guild=discord.Object(id=guild_id))
-            await interaction.followup.send(f"✅ Synced commands to guild {guild_id}.", ephemeral=True)
-        else:
-            await tree.sync()
-            await interaction.followup.send("✅ Synced commands globally.", ephemeral=True)
-    except Exception as e:
-        logger.exception("force_sync failed")
-        await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
-
-@tree.command(name="inspect_setup_revive", description="(Dev) Inspect what Discord sends for setup_revive")
-@app_commands.default_permissions(administrator=True)
-async def inspect_setup_revive(
-    interaction: discord.Interaction,
-    channel_picker: Optional[discord.abc.GuildChannel] = None,
-    channel: Optional[str] = None,
-    category: Optional[str] = None,
-    hours: Optional[int] = None
-):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        logger.info("inspect_setup_revive called by %s in guild %s", interaction.user.id, interaction.guild_id)
-        logger.info("channel_picker: %r", channel_picker)
-        logger.info("channel (typed): %r", channel)
-        logger.info("category: %r", category)
-        logger.info("hours: %r", hours)
-        parts = [
-            f"channel_picker: {repr(channel_picker)}",
-            f"channel (typed): {repr(channel)}",
-            f"category: {repr(category)}",
-            f"hours: {repr(hours)}"
-        ]
-        await interaction.followup.send("\n".join(parts), ephemeral=True)
-    except Exception:
-        logger.exception("inspect_setup_revive failed")
-        await interaction.followup.send("❌ Failed to inspect inputs. Check logs.", ephemeral=True)
-
-@tree.command(name="db_list_categories", description="(Dev) Show categories stored in DB for this guild")
-@app_commands.default_permissions(administrator=True)
-async def db_list_categories(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        cats = await get_categories(interaction.guild_id)
-        await interaction.followup.send(f"DB categories ({len(cats)}): {', '.join(cats) if cats else 'None'}", ephemeral=True)
-    except Exception:
-        logger.exception("db_list_categories failed")
-        await interaction.followup.send("❌ Failed to read DB. Check logs.", ephemeral=True)
 
 # ==================== EVENTS ====================
 @bot.event
