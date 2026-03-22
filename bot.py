@@ -1,4 +1,18 @@
-# chatpulse_bot.py
+# chatpulse_full.py
+# Full ChatPulse bot — complete, ready-to-paste, includes:
+# - All default questions (apex, minecraft, cod, general)
+# - All useful commands (ping, help, add_category, add_question, delete_question,
+#   list_questions, setup_revive, remove_revive, revive_now, status, reset_categories, debug_categories)
+# - Robust channel resolution (picker + typed input)
+# - Interaction deferral to avoid timeouts
+# - Global command sync
+# - DB seeding without duplicates
+# - Background inactivity loop
+# - Defensive logging and error handling
+#
+# Requirements: discord.py (2.x), aiosqlite
+# Set environment variable DISCORD_BOT_TOKEN (or TOKEN) before running.
+
 import os
 import re
 import time
@@ -6,18 +20,19 @@ import random
 import logging
 import asyncio
 import aiosqlite
+from typing import Optional
+
 import discord
 from discord.ext import commands
 from discord import app_commands
-from typing import Optional
 
 # ==================== CONFIG ====================
-TOKEN = os.environ.get('TOKEN') or os.environ.get('DISCORD_BOT_TOKEN') or "YOUR_TOKEN"
-DB_PATH = os.environ.get('DB_PATH', 'chatpulse.db')
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("TOKEN") or "YOUR_TOKEN"
+DB_PATH = os.environ.get("DB_PATH", "chatpulse.db")
 LOG_LEVEL = logging.INFO
 
 # ==================== LOGGING ====================
-logging.basicConfig(level=LOG_LEVEL)
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("chatpulse")
 
 # ==================== BOT SETUP ====================
@@ -385,6 +400,7 @@ async def init_db():
         await db.commit()
 
 async def seed_default_questions(guild_id: int):
+    """Insert default categories/questions only if the category doesn't already exist for the guild."""
     async with aiosqlite.connect(DB_PATH) as db:
         for category, questions in DEFAULT_QUESTIONS.items():
             cur = await db.execute("SELECT 1 FROM categories WHERE guild_id = ? AND name = ? LIMIT 1", (guild_id, category))
@@ -458,25 +474,31 @@ async def category_autocomplete(interaction: discord.Interaction, current: str):
 # ==================== CHANNEL RESOLUTION ====================
 CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
 
-async def resolve_text_channel(guild: discord.Guild, raw: str) -> Optional[discord.TextChannel]:
-    if not guild:
+async def resolve_text_channel(guild: Optional[discord.Guild], raw: str) -> Optional[discord.TextChannel]:
+    if not guild or not raw:
         return None
     raw = raw.strip()
     # mention like <#123>
     m = CHANNEL_MENTION_RE.match(raw)
     if m:
-        cid = int(m.group(1))
-        ch = guild.get_channel(cid)
-        return ch if isinstance(ch, discord.TextChannel) else None
+        try:
+            cid = int(m.group(1))
+            ch = guild.get_channel(cid)
+            return ch if isinstance(ch, discord.TextChannel) else None
+        except Exception:
+            return None
     # numeric id
     if raw.isdigit():
-        ch = guild.get_channel(int(raw))
-        return ch if isinstance(ch, discord.TextChannel) else None
+        try:
+            ch = guild.get_channel(int(raw))
+            return ch if isinstance(ch, discord.TextChannel) else None
+        except Exception:
+            return None
     # exact name match
     for ch in guild.text_channels:
         if ch.name.lower() == raw.lower():
             return ch
-    # partial match
+    # partial match fallback
     raw_l = raw.lower()
     for ch in guild.text_channels:
         if raw_l in ch.name.lower():
@@ -524,9 +546,9 @@ async def help_cmd(interaction: discord.Interaction):
         "🔹 `/add_question <category> <content>` — Add a question to a category. (Admins only)\n"
         "🔹 `/delete_question <category> <content>` — Delete a question from a category. (Admins only)\n"
         "🔹 `/list_questions <category>` — List questions in a category.\n"
-        "🔹 `/setup_revive <channel> <category> <hours>` — Configure revive logic for a channel. (Admins only)\n"
-        "🔹 `/remove_revive <channel>` — Remove revive logic from a channel. (Admins only)\n"
-        "🔹 `/revive_now <channel> [category]` — Trigger a manual revive message. (Admins only)\n"
+        "🔹 `/setup_revive` — Configure revive logic for a channel (picker or typed input). (Admins only)\n"
+        "🔹 `/remove_revive` — Remove revive logic from a channel. (Admins only)\n"
+        "🔹 `/revive_now` — Trigger a manual revive message. (Admins only)\n"
         "🔹 `/status` — Show revive channel status and thresholds.\n"
         "🔹 `/reset_categories` — Re-add default categories/questions for this server. (Admins only)\n"
         "🔹 `/debug_categories` — Show categories currently in the DB for this server. (Admins only)\n"
@@ -622,24 +644,44 @@ async def debug_categories(interaction: discord.Interaction):
         logger.exception("debug_categories failed")
         await interaction.followup.send("❌ Failed to fetch categories.", ephemeral=True)
 
-# ----------------- setup_revive (string channel resolver) -----------------
-@tree.command(name="setup_revive", description="Set up revive for a channel")
+# ----------------- setup_revive (picker + typed input) -----------------
+@tree.command(name="setup_revive", description="Set up revive for a channel (picker or typed input)")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
-async def setup_revive(interaction: discord.Interaction, channel: str, category: str, hours: int):
+async def setup_revive(
+    interaction: discord.Interaction,
+    channel: Optional[discord.abc.GuildChannel] = None,   # channel picker
+    channel_str: Optional[str] = None,                   # typed input
+    category: str = "general",
+    hours: int = 1
+):
     await interaction.response.defer(ephemeral=True)
     try:
-        ch = await resolve_text_channel(interaction.guild, channel)
-        if not ch:
-            await interaction.followup.send(
-                "⚠️ Could not resolve that channel. Use the channel picker, mention the channel, or provide its exact name or ID.",
-                ephemeral=True
-            )
+        ch = None
+        # Prefer the picker
+        if channel is not None:
+            if isinstance(channel, discord.TextChannel):
+                ch = channel
+            else:
+                await interaction.followup.send("⚠️ Please pick a normal text channel (not a forum, category, or voice channel).", ephemeral=True)
+                return
+        elif channel_str:
+            ch = await resolve_text_channel(interaction.guild, channel_str)
+            if not ch:
+                await interaction.followup.send(
+                    "⚠️ Could not resolve that channel. Use the channel picker, mention the channel like <#ID>, or provide exact name/ID.",
+                    ephemeral=True
+                )
+                return
+        else:
+            await interaction.followup.send("⚠️ You must provide a channel (use the picker or type a channel name/ID).", ephemeral=True)
             return
+
         cats = await get_categories(interaction.guild_id)
         if category not in cats:
             await interaction.followup.send(f"⚠️ Category '{category}' not found. Add it with /add_category or run /reset_categories.", ephemeral=True)
             return
+
         threshold = max(60, hours * 3600)
         await add_revive_channel(interaction.guild_id, ch.id, category, threshold)
         await interaction.followup.send(f"✅ Revive set for {ch.mention} with category '{category}' after {hours} hour(s).", ephemeral=True)
@@ -647,31 +689,66 @@ async def setup_revive(interaction: discord.Interaction, channel: str, category:
         logger.exception("setup_revive failed")
         await interaction.followup.send("❌ Failed to set revive — check the bot logs.", ephemeral=True)
 
-@tree.command(name="remove_revive", description="Remove revive from a channel")
+# ----------------- remove_revive (picker + typed input) -----------------
+@tree.command(name="remove_revive", description="Remove revive from a channel (picker or typed input)")
 @app_commands.default_permissions(manage_guild=True)
-async def remove_revive_cmd(interaction: discord.Interaction, channel: str):
+async def remove_revive_cmd(
+    interaction: discord.Interaction,
+    channel: Optional[discord.abc.GuildChannel] = None,
+    channel_str: Optional[str] = None
+):
     await interaction.response.defer(ephemeral=True)
     try:
-        ch = await resolve_text_channel(interaction.guild, channel)
-        if not ch:
-            await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
+        ch = None
+        if channel is not None:
+            if isinstance(channel, discord.TextChannel):
+                ch = channel
+            else:
+                await interaction.followup.send("⚠️ Please pick a normal text channel.", ephemeral=True)
+                return
+        elif channel_str:
+            ch = await resolve_text_channel(interaction.guild, channel_str)
+            if not ch:
+                await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
+                return
+        else:
+            await interaction.followup.send("⚠️ You must provide a channel (use the picker or type a channel name/ID).", ephemeral=True)
             return
+
         await remove_revive_channel(interaction.guild_id, ch.id)
         await interaction.followup.send(f"❌ Revive removed from {ch.mention}.", ephemeral=True)
     except Exception:
         logger.exception("remove_revive failed")
         await interaction.followup.send("❌ Failed to remove revive — check the bot logs.", ephemeral=True)
 
-@tree.command(name="revive_now", description="Trigger a manual revive")
+# ----------------- revive_now (picker + typed input) -----------------
+@tree.command(name="revive_now", description="Trigger a manual revive (picker or typed input)")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
-async def revive_now(interaction: discord.Interaction, channel: str, category: str = "general"):
+async def revive_now(
+    interaction: discord.Interaction,
+    channel: Optional[discord.abc.GuildChannel] = None,
+    channel_str: Optional[str] = None,
+    category: str = "general"
+):
     await interaction.response.defer(ephemeral=True)
     try:
-        ch = await resolve_text_channel(interaction.guild, channel)
-        if not ch:
-            await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
+        ch = None
+        if channel is not None:
+            if isinstance(channel, discord.TextChannel):
+                ch = channel
+            else:
+                await interaction.followup.send("⚠️ Please pick a normal text channel.", ephemeral=True)
+                return
+        elif channel_str:
+            ch = await resolve_text_channel(interaction.guild, channel_str)
+            if not ch:
+                await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
+                return
+        else:
+            await interaction.followup.send("⚠️ You must provide a channel (use the picker or type a channel name/ID).", ephemeral=True)
             return
+
         qs = await get_questions(interaction.guild_id, category)
         if not qs:
             await interaction.followup.send(f"No questions available in '{category}'.", ephemeral=True)
@@ -695,7 +772,13 @@ async def status(interaction: discord.Interaction):
         for ch in channels:
             channel_obj = interaction.guild.get_channel(ch["channel_id"])
             mention = channel_obj.mention if channel_obj else f"<#{ch['channel_id']}>"
-            lines.append(f"{mention} → Category: {ch['category']}, Threshold: {ch['inactivity_threshold']//3600}h")
+            # show threshold in hours if divisible, else in minutes
+            th = ch["inactivity_threshold"]
+            if th % 3600 == 0:
+                th_display = f"{th // 3600}h"
+            else:
+                th_display = f"{th // 60}m"
+            lines.append(f"{mention} → Category: {ch['category']}, Threshold: {th_display}")
         await interaction.followup.send("\n".join(lines), ephemeral=True)
     except Exception:
         logger.exception("status failed")
@@ -726,4 +809,6 @@ async def on_ready():
 
 # ==================== RUN ====================
 if __name__ == "__main__":
+    if TOKEN == "YOUR_TOKEN":
+        logger.warning("No token provided. Set DISCORD_BOT_TOKEN or TOKEN environment variable.")
     bot.run(TOKEN)
