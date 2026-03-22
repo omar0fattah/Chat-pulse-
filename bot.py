@@ -1,16 +1,19 @@
+# chatpulse_bot.py
 import os
+import re
 import time
+import random
+import logging
+import asyncio
+import aiosqlite
 import discord
 from discord.ext import commands
 from discord import app_commands
-import asyncio
-import aiosqlite
-import random
-import logging
+from typing import Optional
 
 # ==================== CONFIG ====================
 TOKEN = os.environ.get('TOKEN') or os.environ.get('DISCORD_BOT_TOKEN') or "YOUR_TOKEN"
-DB_PATH = 'chatpulse.db'
+DB_PATH = os.environ.get('DB_PATH', 'chatpulse.db')
 LOG_LEVEL = logging.INFO
 
 # ==================== LOGGING ====================
@@ -375,20 +378,19 @@ CREATE TABLE IF NOT EXISTS revive_channels (
 );
 """
 
-# ==================== DATABASE HELPERS ====================
+# ==================== DB HELPERS ====================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(_SCHEMA_SQL)
         await db.commit()
 
 async def seed_default_questions(guild_id: int):
-    """Insert default categories/questions only if the category doesn't already exist for the guild."""
     async with aiosqlite.connect(DB_PATH) as db:
         for category, questions in DEFAULT_QUESTIONS.items():
             cur = await db.execute("SELECT 1 FROM categories WHERE guild_id = ? AND name = ? LIMIT 1", (guild_id, category))
             exists = await cur.fetchone()
             if exists:
-                continue  # skip if category already exists
+                continue
             await db.execute("INSERT INTO categories (guild_id, name) VALUES (?, ?)", (guild_id, category))
             ts = int(time.time())
             for q in questions:
@@ -418,10 +420,12 @@ async def get_questions(guild_id: int, category: str):
         rows = await cur.fetchall()
         return [r["content"] for r in rows]
 
-async def remove_revive_channel(guild_id: int, channel_id: int):
+async def get_categories(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM revive_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id))
-        await db.commit()
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT name FROM categories WHERE guild_id = ?", (guild_id,))
+        rows = await cur.fetchall()
+        return [r["name"] for r in rows]
 
 async def add_revive_channel(guild_id: int, channel_id: int, category: str, threshold: int):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -431,19 +435,17 @@ async def add_revive_channel(guild_id: int, channel_id: int, category: str, thre
         )
         await db.commit()
 
+async def remove_revive_channel(guild_id: int, channel_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM revive_channels WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id))
+        await db.commit()
+
 async def get_revive_channels(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM revive_channels WHERE guild_id = ?", (guild_id,))
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
-
-async def get_categories(guild_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT name FROM categories WHERE guild_id = ?", (guild_id,))
-        rows = await cur.fetchall()
-        return [r["name"] for r in rows]
 
 # ==================== AUTOCOMPLETE ====================
 async def category_autocomplete(interaction: discord.Interaction, current: str):
@@ -453,12 +455,39 @@ async def category_autocomplete(interaction: discord.Interaction, current: str):
         for name in names if current.lower() in name.lower()
     ]
 
+# ==================== CHANNEL RESOLUTION ====================
+CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
+
+async def resolve_text_channel(guild: discord.Guild, raw: str) -> Optional[discord.TextChannel]:
+    if not guild:
+        return None
+    raw = raw.strip()
+    # mention like <#123>
+    m = CHANNEL_MENTION_RE.match(raw)
+    if m:
+        cid = int(m.group(1))
+        ch = guild.get_channel(cid)
+        return ch if isinstance(ch, discord.TextChannel) else None
+    # numeric id
+    if raw.isdigit():
+        ch = guild.get_channel(int(raw))
+        return ch if isinstance(ch, discord.TextChannel) else None
+    # exact name match
+    for ch in guild.text_channels:
+        if ch.name.lower() == raw.lower():
+            return ch
+    # partial match
+    raw_l = raw.lower()
+    for ch in guild.text_channels:
+        if raw_l in ch.name.lower():
+            return ch
+    return None
+
 # ==================== BACKGROUND LOOP ====================
 async def check_inactivity_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            rows = []
             async with aiosqlite.connect(DB_PATH) as db:
                 db.row_factory = aiosqlite.Row
                 cur = await db.execute("SELECT * FROM revive_channels")
@@ -479,10 +508,10 @@ async def check_inactivity_loop():
                                         (now_ts, row["id"]),
                                     )
                                     await db.commit()
-                except Exception as e:
-                    logger.exception("Failed to process revive row: %s", e)
-        except Exception as e:
-            logger.exception("Error in inactivity loop: %s", e)
+                except Exception:
+                    logger.exception("Failed to process revive row id=%s", row.get("id"))
+        except Exception:
+            logger.exception("Error in inactivity loop")
         await asyncio.sleep(60)
 
 # ==================== SLASH COMMANDS ====================
@@ -511,114 +540,175 @@ async def ping(interaction: discord.Interaction):
 @tree.command(name="add_category", description="Add a new question category")
 @app_commands.default_permissions(manage_guild=True)
 async def add_category_cmd(interaction: discord.Interaction, name: str):
-    await add_category(interaction.guild_id, name)
-    await interaction.response.send_message(f"✅ Category '{name}' added.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await add_category(interaction.guild_id, name)
+        await interaction.followup.send(f"✅ Category '{name}' added.", ephemeral=True)
+    except Exception:
+        logger.exception("add_category failed")
+        await interaction.followup.send("❌ Failed to add category.", ephemeral=True)
 
 @tree.command(name="add_question", description="Add a question to a category")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
 async def add_question_cmd(interaction: discord.Interaction, category: str, content: str):
-    await add_question(interaction.guild_id, category, interaction.user.id, content, int(time.time()))
-    await interaction.response.send_message(f"✅ Question added to '{category}'.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        cats = await get_categories(interaction.guild_id)
+        if category not in cats:
+            await interaction.followup.send(f"⚠️ Category '{category}' not found. Add it with /add_category or run /reset_categories.", ephemeral=True)
+            return
+        await add_question(interaction.guild_id, category, interaction.user.id, content, int(time.time()))
+        await interaction.followup.send(f"✅ Question added to '{category}'.", ephemeral=True)
+    except Exception:
+        logger.exception("add_question failed")
+        await interaction.followup.send("❌ Failed to add question.", ephemeral=True)
 
 @tree.command(name="delete_question", description="Delete a question from a category")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
 async def delete_question_cmd(interaction: discord.Interaction, category: str, content: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT id FROM questions WHERE guild_id = ? AND category = ? AND content = ? LIMIT 1",
-            (interaction.guild_id, category, content)
-        )
-        row = await cur.fetchone()
-        if not row:
-            await interaction.response.send_message(f"⚠️ No matching question found in '{category}'.", ephemeral=True)
-            return
-        await db.execute("DELETE FROM questions WHERE id = ?", (row[0],))
-        await db.commit()
-    await interaction.response.send_message(f"❌ Question '{content}' deleted from '{category}'.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "SELECT id FROM questions WHERE guild_id = ? AND category = ? AND content = ? LIMIT 1",
+                (interaction.guild_id, category, content)
+            )
+            row = await cur.fetchone()
+            if not row:
+                await interaction.followup.send(f"⚠️ No matching question found in '{category}'.", ephemeral=True)
+                return
+            await db.execute("DELETE FROM questions WHERE id = ?", (row[0],))
+            await db.commit()
+        await interaction.followup.send(f"❌ Question '{content}' deleted from '{category}'.", ephemeral=True)
+    except Exception:
+        logger.exception("delete_question failed")
+        await interaction.followup.send("❌ Failed to delete question.", ephemeral=True)
 
 @tree.command(name="list_questions", description="List questions in a category")
 @app_commands.autocomplete(category=category_autocomplete)
 async def list_questions_cmd(interaction: discord.Interaction, category: str):
-    qs = await get_questions(interaction.guild_id, category)
-    if not qs:
-        await interaction.response.send_message("No questions found.", ephemeral=True)
-    else:
-        # limit to 50 to avoid huge messages
-        await interaction.response.send_message("\n".join([f"- {q}" for q in qs[:50]]), ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        qs = await get_questions(interaction.guild_id, category)
+        if not qs:
+            await interaction.followup.send("No questions found.", ephemeral=True)
+            return
+        await interaction.followup.send("\n".join([f"- {q}" for q in qs[:50]]), ephemeral=True)
+    except Exception:
+        logger.exception("list_questions failed")
+        await interaction.followup.send("❌ Failed to list questions.", ephemeral=True)
 
 @tree.command(name="reset_categories", description="Reseed default categories/questions for this server")
 @app_commands.default_permissions(manage_guild=True)
 async def reset_categories(interaction: discord.Interaction):
-    await seed_default_questions(interaction.guild_id)
-    await interaction.response.send_message("✅ Default categories and questions re-added (if missing).", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await seed_default_questions(interaction.guild_id)
+        await interaction.followup.send("✅ Default categories and questions re-added (if missing).", ephemeral=True)
+    except Exception:
+        logger.exception("reset_categories failed")
+        await interaction.followup.send("❌ Failed to reset categories.", ephemeral=True)
 
 @tree.command(name="debug_categories", description="List categories currently in the DB for this server")
 @app_commands.default_permissions(manage_guild=True)
 async def debug_categories(interaction: discord.Interaction):
-    cats = await get_categories(interaction.guild_id)
-    await interaction.response.send_message(f"Categories: {', '.join(cats) if cats else 'None'}", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        cats = await get_categories(interaction.guild_id)
+        await interaction.followup.send(f"Categories: {', '.join(cats) if cats else 'None'}", ephemeral=True)
+    except Exception:
+        logger.exception("debug_categories failed")
+        await interaction.followup.send("❌ Failed to fetch categories.", ephemeral=True)
 
+# ----------------- setup_revive (string channel resolver) -----------------
 @tree.command(name="setup_revive", description="Set up revive for a channel")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
-async def setup_revive(interaction: discord.Interaction, channel: discord.abc.GuildChannel, category: str, hours: int):
-    # Accept any guild channel in the UI, but enforce text channel at runtime
-    if not isinstance(channel, discord.TextChannel):
-        await interaction.response.send_message("⚠️ Please select a normal text channel (not a forum, category, or voice channel).", ephemeral=True)
-        return
-    # Ensure category exists
-    cats = await get_categories(interaction.guild_id)
-    if category not in cats:
-        await interaction.response.send_message(f"⚠️ Category '{category}' not found. Add it with /add_category or run /reset_categories.", ephemeral=True)
-        return
-    threshold = max(60, hours * 3600)  # minimum 60 seconds safety
-    await add_revive_channel(interaction.guild_id, channel.id, category, threshold)
-    await interaction.response.send_message(f"✅ Revive set for {channel.mention} with category '{category}' after {hours} hour(s) of inactivity.", ephemeral=True)
+async def setup_revive(interaction: discord.Interaction, channel: str, category: str, hours: int):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        ch = await resolve_text_channel(interaction.guild, channel)
+        if not ch:
+            await interaction.followup.send(
+                "⚠️ Could not resolve that channel. Use the channel picker, mention the channel, or provide its exact name or ID.",
+                ephemeral=True
+            )
+            return
+        cats = await get_categories(interaction.guild_id)
+        if category not in cats:
+            await interaction.followup.send(f"⚠️ Category '{category}' not found. Add it with /add_category or run /reset_categories.", ephemeral=True)
+            return
+        threshold = max(60, hours * 3600)
+        await add_revive_channel(interaction.guild_id, ch.id, category, threshold)
+        await interaction.followup.send(f"✅ Revive set for {ch.mention} with category '{category}' after {hours} hour(s).", ephemeral=True)
+    except Exception:
+        logger.exception("setup_revive failed")
+        await interaction.followup.send("❌ Failed to set revive — check the bot logs.", ephemeral=True)
 
 @tree.command(name="remove_revive", description="Remove revive from a channel")
 @app_commands.default_permissions(manage_guild=True)
-async def remove_revive_cmd(interaction: discord.Interaction, channel: discord.abc.GuildChannel):
-    if not isinstance(channel, discord.TextChannel):
-        await interaction.response.send_message("⚠️ Only text channels are supported.", ephemeral=True)
-        return
-    await remove_revive_channel(interaction.guild_id, channel.id)
-    await interaction.response.send_message(f"❌ Revive removed from {channel.mention}.", ephemeral=True)
+async def remove_revive_cmd(interaction: discord.Interaction, channel: str):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        ch = await resolve_text_channel(interaction.guild, channel)
+        if not ch:
+            await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
+            return
+        await remove_revive_channel(interaction.guild_id, ch.id)
+        await interaction.followup.send(f"❌ Revive removed from {ch.mention}.", ephemeral=True)
+    except Exception:
+        logger.exception("remove_revive failed")
+        await interaction.followup.send("❌ Failed to remove revive — check the bot logs.", ephemeral=True)
 
 @tree.command(name="revive_now", description="Trigger a manual revive")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.autocomplete(category=category_autocomplete)
-async def revive_now(interaction: discord.Interaction, channel: discord.abc.GuildChannel, category: str = "general"):
-    if not isinstance(channel, discord.TextChannel):
-        await interaction.response.send_message("⚠️ Only text channels are supported.", ephemeral=True)
-        return
-    qs = await get_questions(interaction.guild_id, category)
-    if qs:
+async def revive_now(interaction: discord.Interaction, channel: str, category: str = "general"):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        ch = await resolve_text_channel(interaction.guild, channel)
+        if not ch:
+            await interaction.followup.send("⚠️ Could not resolve that channel. Use the channel picker or mention the channel.", ephemeral=True)
+            return
+        qs = await get_questions(interaction.guild_id, category)
+        if not qs:
+            await interaction.followup.send(f"No questions available in '{category}'.", ephemeral=True)
+            return
         q = random.choice(qs)
-        await channel.send(f"💡 {q}")
-        await interaction.response.send_message("✅ Revive message sent.", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"No questions available in '{category}'.", ephemeral=True)
+        await ch.send(f"💡 {q}")
+        await interaction.followup.send("✅ Revive message sent.", ephemeral=True)
+    except Exception:
+        logger.exception("revive_now failed")
+        await interaction.followup.send("❌ Failed to send revive — check the bot logs.", ephemeral=True)
 
 @tree.command(name="status", description="Show bot status")
 async def status(interaction: discord.Interaction):
-    channels = await get_revive_channels(interaction.guild_id)
-    if not channels:
-        await interaction.response.send_message("No revive channels configured.", ephemeral=True)
-        return
-    lines = []
-    for ch in channels:
-        channel_obj = interaction.guild.get_channel(ch["channel_id"])
-        mention = channel_obj.mention if channel_obj else f"<#{ch['channel_id']}>"
-        lines.append(f"{mention} → Category: {ch['category']}, Threshold: {ch['inactivity_threshold']//3600}h")
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        channels = await get_revive_channels(interaction.guild_id)
+        if not channels:
+            await interaction.followup.send("No revive channels configured.", ephemeral=True)
+            return
+        lines = []
+        for ch in channels:
+            channel_obj = interaction.guild.get_channel(ch["channel_id"])
+            mention = channel_obj.mention if channel_obj else f"<#{ch['channel_id']}>"
+            lines.append(f"{mention} → Category: {ch['category']}, Threshold: {ch['inactivity_threshold']//3600}h")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+    except Exception:
+        logger.exception("status failed")
+        await interaction.followup.send("❌ Failed to fetch status.", ephemeral=True)
 
 # ==================== EVENTS ====================
 @bot.event
 async def on_ready():
     logger.info("Bot ready: %s", bot.user)
-    await init_db()
+    try:
+        await init_db()
+    except Exception:
+        logger.exception("Failed to initialize DB")
     # seed defaults for all guilds (only inserts if missing)
     for guild in bot.guilds:
         try:
@@ -627,7 +717,7 @@ async def on_ready():
             logger.exception("Failed to seed defaults for guild %s", guild.id)
     # start background loop
     bot.loop.create_task(check_inactivity_loop())
-    # global sync (commands will be registered globally)
+    # global sync
     try:
         await tree.sync()
         logger.info("Commands synced globally.")
