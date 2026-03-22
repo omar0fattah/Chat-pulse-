@@ -16,7 +16,8 @@ revive_settings = {}  # {guild_id: {"channel": channel_id, "delay": seconds}}
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    await tree.sync()
+    guild = discord.Object(id=1413551789034307657  # paste your server ID here
+    await tree.sync(guild=guild)  # sync only to that guild
     revive_loop.start()
 
 @tree.command(name="ping", description="Check if the bot is alive")
