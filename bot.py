@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
+# Question pools by category
 QUESTION_POOLS = {
     "general": [
         "👀 What’s everyone up to today?",
@@ -32,7 +33,6 @@ QUESTION_POOLS = {
     ]
 }
 
-
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -41,12 +41,12 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # Store revive settings per guild
-revive_settings = {}  # {guild_id: {"channel": channel_id, "delay": seconds}}
+revive_settings = {}  # {guild_id: {"channel": channel_id, "delay": seconds, "category": str}}
 
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    guild = discord.Object(id=1413551789034307657)  # your server ID
+    guild = discord.Object(id=1413551789034307657)  # your dev server ID
 
     # Sync globally (slow propagation, but needed for all servers)
     global_cmds = await tree.sync()
@@ -58,24 +58,39 @@ async def on_ready():
 
     revive_loop.start()
 
-
 @tree.command(name="ping", description="Check if the bot is alive")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!", ephemeral=True)
 
 @tree.command(name="setup_revive", description="Choose a channel, delay, and category for revive messages")
-async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, minutes: int = 120, category: str = "general"):
+@app_commands.describe(channel="Channel to revive", minutes="Delay in minutes", category="Pick a category")
+@app_commands.choices(category=[
+    app_commands.Choice(name="General", value="general"),
+    app_commands.Choice(name="Apex Legends", value="apex"),
+    app_commands.Choice(name="Call of Duty", value="cod"),
+    app_commands.Choice(name="Minecraft", value="minecraft"),
+])
+async def setup_revive(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    minutes: int = 120,
+    category: app_commands.Choice[str] = None
+):
     if minutes < 1:
         await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
         return
-    if category not in QUESTION_POOLS:
-        await interaction.response.send_message(f"❌ Invalid category. Choose from: {', '.join(QUESTION_POOLS.keys())}", ephemeral=True)
-        return
-    revive_settings[interaction.guild_id] = {"channel": channel.id, "delay": minutes * 60, "category": category}
-    await interaction.response.send_message(
-        f"✅ Revive channel set to {channel.mention}, delay {minutes} minutes, category {category}.", ephemeral=True
-    )
 
+    chosen_category = category.value if category else "general"
+    revive_settings[interaction.guild_id] = {
+        "channel": channel.id,
+        "delay": minutes * 60,
+        "category": chosen_category
+    }
+
+    await interaction.response.send_message(
+        f"✅ Revive channel set to {channel.mention}, delay {minutes} minutes, category {chosen_category}.",
+        ephemeral=True
+    )
 
 @tree.command(name="setup_delay", description="Set inactivity delay before revive (in minutes)")
 async def setup_delay(interaction: discord.Interaction, minutes: int):
@@ -101,12 +116,14 @@ async def revive_now(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Revive channel not found.", ephemeral=True)
         return
 
-    # Get category from settings, default to "general"
     category = settings.get("category", "general")
     questions = QUESTION_POOLS.get(category, QUESTION_POOLS["general"])
 
     await channel.send(random.choice(questions))
-    await interaction.response.send_message(f"✅ Revive triggered in {channel.mention} (category: {category})", ephemeral=True)
+    await interaction.response.send_message(
+        f"✅ Revive triggered in {channel.mention} (category: {category})",
+        ephemeral=True
+    )
 
 @tasks.loop(minutes=5)
 async def revive_loop():
@@ -120,13 +137,8 @@ async def revive_loop():
             try:
                 async for message in channel.history(limit=1):
                     if (discord.utils.utcnow() - message.created_at).total_seconds() > delay:
-                        questions = [
-                            "👀 What’s everyone up to today?",
-                            "🔥 Share the last song you listened to!",
-                            "💡 What’s a random fun fact you know?",
-                            "🍕 Pineapple on pizza: yes or no?",
-                            "🎮 What game are you playing lately?"
-                        ]
+                        category = settings.get("category", "general")
+                        questions = QUESTION_POOLS.get(category, QUESTION_POOLS["general"])
                         await channel.send(random.choice(questions))
             except Exception as e:
                 print(f"⚠️ Could not check {channel}: {e}")
