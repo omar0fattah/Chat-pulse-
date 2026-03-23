@@ -4,6 +4,35 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
+QUESTION_POOLS = {
+    "general": [
+        "👀 What’s everyone up to today?",
+        "🔥 Share the last song you listened to!",
+        "💡 What’s a random fun fact you know?",
+        "🍕 Pineapple on pizza: yes or no?",
+        "🎮 What game are you playing lately?"
+    ],
+    "apex": [
+        "🏹 Who’s your main legend?",
+        "💥 Favorite weapon loadout?",
+        "🗺️ Best drop spot this season?",
+        "🔥 Ranked grind or casual vibes?"
+    ],
+    "cod": [
+        "🔫 What’s your go-to class setup?",
+        "🎯 Sniping or rushing?",
+        "💣 Favorite map of all time?",
+        "⚔️ Zombies or Multiplayer?"
+    ],
+    "minecraft": [
+        "⛏️ What’s your latest build?",
+        "🌍 Survival or Creative?",
+        "🐉 Ever beaten the Ender Dragon?",
+        "🏠 Show off your base design!"
+    ]
+}
+
+
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -34,15 +63,19 @@ async def on_ready():
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!", ephemeral=True)
 
-@tree.command(name="setup_revive", description="Choose a channel and delay for revive messages")
-async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, minutes: int = 120):
+@tree.command(name="setup_revive", description="Choose a channel, delay, and category for revive messages")
+async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, minutes: int = 120, category: str = "general"):
     if minutes < 1:
         await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
         return
-    revive_settings[interaction.guild_id] = {"channel": channel.id, "delay": minutes * 60}
+    if category not in QUESTION_POOLS:
+        await interaction.response.send_message(f"❌ Invalid category. Choose from: {', '.join(QUESTION_POOLS.keys())}", ephemeral=True)
+        return
+    revive_settings[interaction.guild_id] = {"channel": channel.id, "delay": minutes * 60, "category": category}
     await interaction.response.send_message(
-        f"✅ Revive channel set to {channel.mention} with {minutes} minutes delay.", ephemeral=True
+        f"✅ Revive channel set to {channel.mention}, delay {minutes} minutes, category {category}.", ephemeral=True
     )
+
 
 @tree.command(name="setup_delay", description="Set inactivity delay before revive (in minutes)")
 async def setup_delay(interaction: discord.Interaction, minutes: int):
@@ -62,19 +95,18 @@ async def revive_now(interaction: discord.Interaction):
     if not settings or "channel" not in settings:
         await interaction.response.send_message("❌ No revive channel set yet.", ephemeral=True)
         return
+
     channel = interaction.guild.get_channel(settings["channel"])
     if not channel:
         await interaction.response.send_message("❌ Revive channel not found.", ephemeral=True)
         return
-    questions = [
-        "👀 What’s everyone up to today?",
-        "🔥 Share the last song you listened to!",
-        "💡 What’s a random fun fact you know?",
-        "🍕 Pineapple on pizza: yes or no?",
-        "🎮 What game are you playing lately?"
-    ]
+
+    # Get category from settings, default to "general"
+    category = settings.get("category", "general")
+    questions = QUESTION_POOLS.get(category, QUESTION_POOLS["general"])
+
     await channel.send(random.choice(questions))
-    await interaction.response.send_message(f"✅ Revive triggered in {channel.mention}", ephemeral=True)
+    await interaction.response.send_message(f"✅ Revive triggered in {channel.mention} (category: {category})", ephemeral=True)
 
 @tasks.loop(minutes=5)
 async def revive_loop():
