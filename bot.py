@@ -64,13 +64,13 @@ def save_settings():
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    load_settings()
-
     guild = discord.Object(id=1413551789034307657)  # dev server ID
-    global_cmds = await tree.sync()
-    print(f"🌍 Synced {len(global_cmds)} global commands")
-    guild_cmds = await tree.sync(guild=guild)
-    print(f"⚡ Synced {len(guild_cmds)} commands to guild {guild.id}")
+
+    # Global sync (slow propagation)
+    await tree.sync()
+
+    # Guild sync (instant in dev server)
+    await tree.sync(guild=guild)
 
     revive_loop.start()
 
