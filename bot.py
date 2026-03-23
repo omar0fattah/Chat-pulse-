@@ -17,10 +17,18 @@ revive_settings = {}  # {guild_id: {"channel": channel_id, "delay": seconds}}
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    guild = discord.Object(id=1413551789034307657)  # your test server ID
-    synced = await tree.sync(guild=guild)
-    print(f"🔧 Synced {len(synced)} commands to guild {guild.id}")
+    guild = discord.Object(id=1413551789034307657)  # your server ID
+
+    # Sync globally (slow propagation, but needed for all servers)
+    global_cmds = await tree.sync()
+    print(f"🌍 Synced {len(global_cmds)} global commands")
+
+    # Sync instantly to your dev guild
+    guild_cmds = await tree.sync(guild=guild)
+    print(f"⚡ Synced {len(guild_cmds)} commands to guild {guild.id}")
+
     revive_loop.start()
+
 
 @tree.command(name="ping", description="Check if the bot is alive")
 async def ping(interaction: discord.Interaction):
