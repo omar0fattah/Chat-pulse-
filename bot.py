@@ -1,3 +1,4 @@
+import random
 import os
 import discord
 from discord import app_commands
@@ -65,7 +66,7 @@ async def revive_loop():
                             "🍕 Pineapple on pizza: yes or no?",
                             "🎮 What game are you playing lately?"
                         ]
-                        await channel.send(discord.utils.choice(questions))
+                        await channel.send(random.choice(questions))
             except Exception as e:
                 print(f"⚠️ Could not check {channel}: {e}")
 
