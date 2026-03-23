@@ -212,4 +212,6 @@ async def revive_loop():
 # ---------- Run ----------
 token = os.getenv("DISCORD_TOKEN")
 if not token:
-    raise ValueError("❌ DIS
+    raise ValueError("❌ DISCORD_TOKEN environment variable not set!")
+
+client.run(token)
