@@ -1,5 +1,5 @@
-import random
 import os
+import random
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -17,22 +17,23 @@ revive_settings = {}  # {guild_id: {"channel": channel_id, "delay": seconds}}
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    guild = discord.Object(id=1413551789034307657)  # your server ID
-    await tree.sync(guild=guild)  # instant sync in that guild
+    guild = discord.Object(id=1413551789034307657)  # your test server ID
+    synced = await tree.sync(guild=guild)
+    print(f"🔧 Synced {len(synced)} commands to guild {guild.id}")
     revive_loop.start()
-
 
 @tree.command(name="ping", description="Check if the bot is alive")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!", ephemeral=True)
 
-@tree.command(name="setup_revive", description="Choose a channel for revive messages")
-async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel):
-    settings = revive_settings.get(interaction.guild_id, {})
-    settings["channel"] = channel.id
-    revive_settings[interaction.guild_id] = settings
+@tree.command(name="setup_revive", description="Choose a channel and delay for revive messages")
+async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, minutes: int = 120):
+    if minutes < 1:
+        await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
+        return
+    revive_settings[interaction.guild_id] = {"channel": channel.id, "delay": minutes * 60}
     await interaction.response.send_message(
-        f"✅ Revive channel set to {channel.mention}", ephemeral=True
+        f"✅ Revive channel set to {channel.mention} with {minutes} minutes delay.", ephemeral=True
     )
 
 @tree.command(name="setup_delay", description="Set inactivity delay before revive (in minutes)")
@@ -41,20 +42,40 @@ async def setup_delay(interaction: discord.Interaction, minutes: int):
         await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
         return
     settings = revive_settings.get(interaction.guild_id, {})
-    settings["delay"] = minutes * 60  # store in seconds
+    settings["delay"] = minutes * 60
     revive_settings[interaction.guild_id] = settings
     await interaction.response.send_message(
-        f"✅ Revive delay set to {minutes} minutes of silence.", ephemeral=True
+        f"✅ Revive delay updated to {minutes} minutes.", ephemeral=True
     )
 
-@tasks.loop(minutes=5)  # check every 5 minutes
+@tree.command(name="revive_now", description="Trigger a revive message instantly")
+async def revive_now(interaction: discord.Interaction):
+    settings = revive_settings.get(interaction.guild_id)
+    if not settings or "channel" not in settings:
+        await interaction.response.send_message("❌ No revive channel set yet.", ephemeral=True)
+        return
+    channel = interaction.guild.get_channel(settings["channel"])
+    if not channel:
+        await interaction.response.send_message("❌ Revive channel not found.", ephemeral=True)
+        return
+    questions = [
+        "👀 What’s everyone up to today?",
+        "🔥 Share the last song you listened to!",
+        "💡 What’s a random fun fact you know?",
+        "🍕 Pineapple on pizza: yes or no?",
+        "🎮 What game are you playing lately?"
+    ]
+    await channel.send(random.choice(questions))
+    await interaction.response.send_message(f"✅ Revive triggered in {channel.mention}", ephemeral=True)
+
+@tasks.loop(minutes=5)
 async def revive_loop():
     for guild in client.guilds:
         settings = revive_settings.get(guild.id)
         if not settings:
             continue
         channel = guild.get_channel(settings.get("channel"))
-        delay = settings.get("delay", 7200)  # default 2 hours if not set
+        delay = settings.get("delay", 7200)
         if channel:
             try:
                 async for message in channel.history(limit=1):
