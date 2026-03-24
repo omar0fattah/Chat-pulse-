@@ -4,6 +4,9 @@ import json
 import discord
 from discord import app_commands, Embed
 from discord.ext import tasks, commands
+import time
+revive_cooldowns = {}
+metrics_data = {}  # {guild_id: count of revives fired}
 
 SETTINGS_FILE = "revive_settings.json"
 
@@ -95,13 +98,22 @@ def all_categories(guild_id: int):
     return list(BUILTIN_POOLS.keys()) + list(custom.keys())
 
 def make_embed(category: str, question: str):
+    colors = {
+        "general": discord.Color.blurple(),
+        "apex": discord.Color.red(),
+        "cod": discord.Color.dark_gray(),
+        "minecraft": discord.Color.green()
+    }
+    color = colors.get(category, discord.Color.gold())  # default gold for custom
+
     embed = Embed(
         title="✨ Revive Time!",
         description=question,
-        color=discord.Color.blurple()
+        color=color
     )
     embed.set_footer(text=f"Category: {category.capitalize()} • Stay active!")
     return embed
+
 
 # ---------- Commands ----------
 @tree.command(name="ping", description="Check if the bot is alive")
@@ -113,16 +125,20 @@ async def help_cmd(interaction: discord.Interaction):
     categories = ", ".join(all_categories(interaction.guild_id))
     await interaction.response.send_message(
         f"📖 **Available Commands:**\n"
-        f"- /setup_revive (add channel, delay, category)\n"
-        f"- /remove_revive (remove channel)\n"
-        f"- /add_category (create new category)\n"
-        f"- /remove_category (delete custom category)\n"
-        f"- /add_question (add question to category)\n"
-        f"- /remove_question (remove question from category)\n"
-        f"- /revive_now (manual trigger)\n"
-        f"- /bot_status (full bot status)\n"
-        f"- /ping (check bot)\n\n"
-        f"🎯 **Categories:** {categories}",
+        f"- /setup_revive → Add a revive channel (delay + category)\n"
+        f"- /remove_revive → Remove revive from a channel\n"
+        f"- /add_category → Create a new custom category\n"
+        f"- /remove_category → Delete a custom category\n"
+        f"- /add_question → Add a question to a category\n"
+        f"- /remove_question → Remove a question from a category\n"
+        f"- /list_questions → Paginate through all questions in a category\n"
+        f"- /revive_now → Trigger a revive instantly (10‑min cooldown per guild)\n"
+        f"- /metrics → Show revive counts for this guild\n"
+        f"- /bot_status → Full bot status (revives + categories)\n"
+        f"- /ping → Check if the bot is alive\n\n"
+        f"🎯 **Categories:** {categories}\n\n"
+        f"✨ **Notes:** Revive embeds now use category‑specific colors, "
+        f"automatic revives are logged and tracked, and deleted channels are cleaned up.",
         ephemeral=True
     )
 
@@ -139,6 +155,11 @@ async def setup_revive(
         return
     if minutes < 1:
         await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
+        return
+
+    # --- Stage 4: Permission validation ---
+    if not channel.permissions_for(interaction.guild.me).send_messages:
+        await interaction.response.send_message("❌ I cannot send messages in that channel.", ephemeral=True)
         return
 
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
@@ -250,7 +271,10 @@ async def bot_status(interaction: discord.Interaction):
         for s in guild_data["revives"]:
             channel = interaction.guild.get_channel(s["channel"])
             delay_min = s["delay"] // 60
-            revives_text += f"{channel.mention if channel else 'Unknown'} | {delay_min} min | {s['category']}\n"
+            if channel:
+                revives_text += f"{channel.mention} | {delay_min} min | {s['category']}\n"
+            else:
+                revives_text += f"⚠️ Channel deleted | {delay_min} min | {s['category']}\n"
         embed.add_field(name="Revive Channels", value=revives_text, inline=False)
     else:
         embed.add_field(name="Revive Channels", value="None", inline=False)
@@ -258,17 +282,39 @@ async def bot_status(interaction: discord.Interaction):
     # Categories
     cats_text = ""
     for cat in all_categories(interaction.guild_id):
-        questions = get_questions(interaction.guild_id, cat)
-        cats_text += f"**{cat}** ({len(questions)} questions)\n"
+        builtin_count = len(BUILTIN_POOLS.get(cat, []))
+        custom_count = len(
+            revive_settings.get(str(interaction.guild_id), {})
+            .get("custom_categories", {})
+            .get(cat, [])
+        )
+        cats_text += f"**{cat}** → {custom_count} custom, {builtin_count} built-in\n"
     embed.add_field(name="Categories", value=cats_text, inline=False)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@tree.command(name="metrics", description="Show revive metrics for this guild")
+async def metrics(interaction: discord.Interaction):
+    count = metrics_data.get(interaction.guild_id, 0)
+    await interaction.response.send_message(
+        f"📊 Revives fired in this guild: {count}",
+        ephemeral=True
+    )
+
 
 @tree.command(name="revive_now", description="Trigger a revive message instantly")
 async def revive_now(interaction: discord.Interaction):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
+
+    # --- Stage 4: Cooldown check (10 minutes per guild) ---
+    now = time.time()
+    last = revive_cooldowns.get(interaction.guild_id, 0)
+    if now - last < 600:  # 600 seconds = 10 minutes
+        await interaction.response.send_message("❌ Cooldown active, try again later.", ephemeral=True)
+        return
+    revive_cooldowns[interaction.guild_id] = now
 
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
     if not guild_data["revives"]:
@@ -283,8 +329,57 @@ async def revive_now(interaction: discord.Interaction):
                 question = random.choice(questions)
                 await channel.send(embed=make_embed(settings["category"], question))
 
+                # --- Section 5: Metrics + Logging ---
+                metrics_data[interaction.guild_id] = metrics_data.get(interaction.guild_id, 0) + 1
+                print(f"[Revive] {interaction.guild.name} → {channel.name} | {settings['category']}")
+
     await interaction.response.send_message("✅ Revive triggered in all configured channels.", ephemeral=True)
 
+@tree.command(name="list_questions", description="List all questions in a category with pagination")
+async def list_questions(
+    interaction: discord.Interaction,
+    category: str,
+    page: int = 1
+):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
+        return
+
+    # Get questions (custom first, then built-in)
+    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    custom = guild_data.get("custom_categories", {}).get(category, [])
+    builtin = BUILTIN_POOLS.get(category, [])
+    questions = custom + builtin
+
+    if not questions:
+        await interaction.response.send_message("❌ No questions found in that category.", ephemeral=True)
+        return
+
+    # Pagination (20 per page)
+    per_page = 20
+    total_pages = (len(questions) + per_page - 1) // per_page
+    if page < 1 or page > total_pages:
+        await interaction.response.send_message(f"❌ Invalid page. Choose 1–{total_pages}.", ephemeral=True)
+        return
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_questions = questions[start:end]
+
+    # Build embed
+    embed = Embed(
+        title=f"📋 Questions in '{category}'",
+        color=discord.Color.gold()
+    )
+    desc = ""
+    for i, q in enumerate(page_questions, start=start + 1):
+        desc += f"{i}. {q}\n"
+    embed.description = desc
+    embed.set_footer(text=f"Page {page}/{total_pages} • {len(questions)} total questions")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+   
 # ---------- Background Loop ----------
 @tasks.loop(minutes=5)
 async def revive_loop():
@@ -301,8 +396,18 @@ async def revive_loop():
                             if questions:
                                 question = random.choice(questions)
                                 await channel.send(embed=make_embed(settings["category"], question))
+
+                                # --- Section 5: Metrics + Logging ---
+                                metrics_data[guild.id] = metrics_data.get(guild.id, 0) + 1
+                                print(f"[Revive] {guild.name} → {channel.name} | {settings['category']}")
                 except Exception as e:
                     print(f"⚠️ Could not check {channel}: {e}")
+            else:
+                # --- Stage 4: Cleanup for deleted channels ---
+                guild_data["revives"].remove(settings)
+                revive_settings[str(guild.id)] = guild_data
+                save_settings()
+                print(f"⚠️ Removed revive entry for deleted channel in {guild.name}")
 
 # ---------- Run ----------
 token = os.getenv("DISCORD_TOKEN")
