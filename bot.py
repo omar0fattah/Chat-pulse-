@@ -523,9 +523,8 @@ def is_admin(interaction: discord.Interaction) -> bool:
 async def get_questions(guild_id: int, category: str):
     # Load custom categories from DB
     custom = await load_categories(guild_id)
-    if category in BUILTIN_POOLS:
-        return BUILTIN_POOLS[category]
-    return custom.get(category, [])
+    builtin = BUILTIN_POOLS.get(category, [])
+    return builtin + custom.get(category, [])
 
 async def all_categories(guild_id: int):
     # Load custom categories from DB
@@ -722,12 +721,7 @@ async def add_question(interaction: discord.Interaction, category: str, question
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
 
-    # Built-in categories are locked (cannot be modified)
-    if category in BUILTIN_POOLS:
-        await interaction.response.send_message("❌ Cannot add questions to built-in categories.", ephemeral=True)
-        return
-
-    # Load existing questions from DB
+    # Load existing questions from DB (custom additions)
     custom = await load_categories(interaction.guild_id)
     questions = custom.get(category, [])
     questions.append(question)
@@ -735,8 +729,8 @@ async def add_question(interaction: discord.Interaction, category: str, question
     # Save updated list back to DB
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
-            "UPDATE custom_categories SET questions = ? WHERE guild_id = ? AND name = ?",
-            (json.dumps(questions), str(interaction.guild_id), category)
+            "INSERT OR REPLACE INTO custom_categories VALUES (?, ?, ?)",
+            (str(interaction.guild_id), category, json.dumps(questions))
         )
         await db.commit()
 
@@ -744,7 +738,7 @@ async def add_question(interaction: discord.Interaction, category: str, question
 
 # --- Autocomplete for add_question ---
 @add_question.autocomplete("category")
-async def add_category_autocomplete(interaction: discord.Interaction, current: str):
+async def add_question_autocomplete(interaction: discord.Interaction, current: str):
     custom = await load_categories(interaction.guild_id)
     cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
     return [
@@ -760,25 +754,19 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
 
-    # Built-in categories are locked (cannot be modified)
-    if category in BUILTIN_POOLS:
-        await interaction.response.send_message("❌ Cannot remove questions from built-in categories.", ephemeral=True)
-        return
-
-    # Load existing questions from DB
+    # Load existing questions from DB (custom additions)
     custom = await load_categories(interaction.guild_id)
     if category not in custom:
-        await interaction.response.send_message("❌ Category not found.", ephemeral=True)
+        await interaction.response.send_message("❌ Category not found or no custom additions.", ephemeral=True)
         return
 
     questions = custom[category]
-    try:
-        questions.remove(question)
-    except ValueError:
-        await interaction.response.send_message("❌ Question not found in that category.", ephemeral=True)
+    if question not in questions:
+        await interaction.response.send_message("❌ You can only remove questions you added.", ephemeral=True)
         return
 
-    # Save updated list back to DB
+    # Remove from DB additions
+    questions.remove(question)
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute(
             "UPDATE custom_categories SET questions = ? WHERE guild_id = ? AND name = ?",
@@ -786,16 +774,18 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
         )
         await db.commit()
 
-    await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Custom question removed from '{category}'.", ephemeral=True)
 
+# --- Autocomplete for remove_question ---
 @remove_question.autocomplete("category")
-async def remove_category_autocomplete(interaction: discord.Interaction, current: str):
+async def remove_question_autocomplete(interaction: discord.Interaction, current: str):
     custom = await load_categories(interaction.guild_id)
     cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
     return [
         app_commands.Choice(name=cat, value=cat)
         for cat in cats if current.lower() in cat.lower()
     ][:25]
+
 
 
 @tree.command(name="bot_status", description="Show full bot status")
