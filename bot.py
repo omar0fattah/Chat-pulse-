@@ -759,6 +759,7 @@ async def revive_now(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Revive triggered in all configured channels.", ephemeral=True)
 
 @tree.command(name="list_questions", description="List all questions in a category with pagination")
+@app_commands.describe(category="Category to list questions from", page="Page number to view")
 async def list_questions(
     interaction: discord.Interaction,
     category: str,
@@ -772,7 +773,7 @@ async def list_questions(
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
     custom = guild_data.get("custom_categories", {}).get(category, [])
     builtin = BUILTIN_POOLS.get(category, [])
-    questions = custom + builtin
+    questions = custom + builtin    
 
     if not questions:
         await interaction.response.send_message("❌ No questions found in that category.", ephemeral=True)
@@ -801,6 +802,16 @@ async def list_questions(
     embed.set_footer(text=f"Page {page}/{total_pages} • {len(questions)} total questions")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# --- Autocomplete for list_questions ---
+@list_questions.autocomplete("category")
+async def list_questions_autocomplete(interaction: discord.Interaction, current: str):
+    cats = all_categories(interaction.guild_id)
+    return [
+        app_commands.Choice(name=cat, value=cat)
+        for cat in cats if current.lower() in cat.lower()
+    ][:25]
+
 
    
 # ---------- Background Loop ----------
