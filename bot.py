@@ -466,7 +466,8 @@ async def init_db():
             guild_id TEXT,
             channel_id INTEGER,
             delay INTEGER,
-            category TEXT
+            category TEXT,
+            role_id INTEGER
         )
         """)
         await db.execute("""
@@ -478,16 +479,27 @@ async def init_db():
         """)
         await db.commit()
 
+
 async def load_revives(guild_id: int):
     async with aiosqlite.connect(DB_FILE) as db:
-        cursor = await db.execute("SELECT channel_id, delay, category FROM revives WHERE guild_id = ?", (str(guild_id),))
+        cursor = await db.execute(
+            "SELECT channel_id, delay, category, role_id FROM revives WHERE guild_id = ?",
+            (str(guild_id),)
+        )
         rows = await cursor.fetchall()
-        return [{"channel": r[0], "delay": r[1], "category": r[2]} for r in rows]
+        return [
+            {"channel": r[0], "delay": r[1], "category": r[2], "role_id": r[3]}
+            for r in rows
+        ]
 
-async def save_revive(guild_id: int, channel_id: int, delay: int, category: str):
+async def save_revive(guild_id: int, channel_id: int, delay: int, category: str, role_id: int = None):
     async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute("INSERT INTO revives VALUES (?, ?, ?, ?)", (str(guild_id), channel_id, delay, category))
+        await db.execute(
+            "INSERT INTO revives VALUES (?, ?, ?, ?, ?)",
+            (str(guild_id), channel_id, delay, category, role_id)
+        )
         await db.commit()
+
 
 async def remove_revive(guild_id: int, channel_id: int):
     async with aiosqlite.connect(DB_FILE) as db:
@@ -577,12 +589,18 @@ async def help_cmd(interaction: discord.Interaction):
 
 
 @tree.command(name="setup_revive", description="Add a revive channel with delay and category")
-@app_commands.describe(channel="Channel to revive", minutes="Delay in minutes", category="Category to use")
+@app_commands.describe(
+    channel="Channel to revive",
+    minutes="Delay in minutes",
+    category="Category to use",
+    role="Optional role to mention when reviving"
+)
 async def setup_revive(
     interaction: discord.Interaction,
     channel: discord.TextChannel,
-    minutes: int = 120,
-    category: str = "general"
+    minutes: int,
+    category: str,
+    role: discord.Role = None   # optional
 ):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
@@ -601,13 +619,21 @@ async def setup_revive(
         await interaction.response.send_message("❌ This channel already has a revive setup.", ephemeral=True)
         return
 
-    # Save the revive setup in DB
-    await save_revive(interaction.guild_id, channel.id, minutes * 60, category)
+    # Save the revive setup in DB (now includes role_id)
+    await save_revive(
+        interaction.guild_id,
+        channel.id,
+        minutes * 60,
+        category,
+        role.id if role else None
+    )
 
     await interaction.response.send_message(
-        f"✅ Added revive in {channel.mention}, delay {minutes} minutes, category {category}.",
+        f"✅ Added revive in {channel.mention}, delay {minutes} minutes, category {category}"
+        + (f", role {role.mention}" if role else "") + ".",
         ephemeral=True
     )
+
 
 # --- Autocomplete for category ---
 @setup_revive.autocomplete("category")
@@ -937,10 +963,16 @@ async def revive_loop():
                             questions = await get_questions(guild.id, settings["category"])
                             if questions:
                                 question = random.choice(questions)
-                                await channel.send(embed=make_embed(settings["category"], question))
+
+                                # 🔑 NEW: check for role_id
+                                role = guild.get_role(settings.get("role_id")) if settings.get("role_id") else None
+                                content = role.mention if role else None
+
+                                await channel.send(content=content, embed=make_embed(settings["category"], question))
 
                                 metrics_data[guild.id] = metrics_data.get(guild.id, 0) + 1
-                                print(f"[Revive] {guild.name} → {channel.name} | {settings['category']}")
+                                print(f"[Revive] {guild.name} → {channel.name} | {settings['category']}"
+                                      + (f" | Role: {role.name}" if role else ""))
                 except Exception as e:
                     print(f"⚠️ Could not check {channel}: {e}")
             else:
