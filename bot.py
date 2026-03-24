@@ -1,3 +1,4 @@
+from discord.ui import View, button
 import os
 import random
 import aiosqlite
@@ -454,7 +455,6 @@ tree = client.tree
 #       "custom_categories": {"catname": ["q1","q2",...]}
 #   }
 # }
-revive_settings = {}
 
 # ---------- Persistence ----------
 DB_FILE = "revive_settings.db"
@@ -520,16 +520,16 @@ async def on_ready():
 def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_guild
 
-def get_questions(guild_id: int, category: str):
-    guild_data = revive_settings.get(str(guild_id), {})
-    custom = guild_data.get("custom_categories", {})
+async def get_questions(guild_id: int, category: str):
+    # Load custom categories from DB
+    custom = await load_categories(guild_id)
     if category in BUILTIN_POOLS:
         return BUILTIN_POOLS[category]
     return custom.get(category, [])
 
-def all_categories(guild_id: int):
-    guild_data = revive_settings.get(str(guild_id), {})
-    custom = guild_data.get("custom_categories", {})
+async def all_categories(guild_id: int):
+    # Load custom categories from DB
+    custom = await load_categories(guild_id)
     return list(BUILTIN_POOLS.keys()) + list(custom.keys())
 
 def make_embed(category: str, question: str):
@@ -549,7 +549,6 @@ def make_embed(category: str, question: str):
     embed.set_footer(text=f"Category: {category.capitalize()} • Stay active!")
     return embed
 
-
 # ---------- Commands ----------
 @tree.command(name="ping", description="Check if the bot is alive")
 async def ping(interaction: discord.Interaction):
@@ -557,8 +556,8 @@ async def ping(interaction: discord.Interaction):
 
 @tree.command(name="help", description="Show all commands and categories")
 async def help_cmd(interaction: discord.Interaction):
-    categories = ", ".join(all_categories(interaction.guild_id))
-    await interaction.response.send_message(
+  categories = ", ".join(await all_categories(interaction.guild_id))
+  await interaction.response.send_message(
         f"📖 **Available Commands:**\n"
         f"- /setup_revive → Add a revive channel (delay + category)\n"
         f"- /remove_revive → Remove revive from a channel\n"
@@ -661,42 +660,60 @@ async def add_category(interaction: discord.Interaction, name: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+
+    # Prevent overriding built-in categories
     if name in BUILTIN_POOLS:
         await interaction.response.send_message("❌ Cannot override built-in categories.", ephemeral=True)
         return
-    guild_data["custom_categories"].setdefault(name, [])
-    revive_settings[str(interaction.guild_id)] = guild_data
-    save_settings()
-    await interaction.response.send_message(f"✅ Custom category '{name}' added.", ephemeral=True)
+
+    # Save new category in DB
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO custom_categories VALUES (?, ?, ?)",
+            (str(interaction.guild_id), name, json.dumps([]))
+        )
+        await db.commit()
+
+    await interaction.response.send_message(
+        f"✅ Custom category '{name}' added.",
+        ephemeral=True
+    )
 
 @tree.command(name="remove_category", description="Remove a custom category")
 async def remove_category(interaction: discord.Interaction, name: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+
+    # Prevent deleting built-in categories
     if name in BUILTIN_POOLS:
         await interaction.response.send_message("❌ Cannot delete built-in categories.", ephemeral=True)
         return
-    if name in guild_data["custom_categories"]:
-        del guild_data["custom_categories"][name]
-        revive_settings[str(interaction.guild_id)] = guild_data
-        save_settings()
-        await interaction.response.send_message(f"✅ Custom category '{name}' removed.", ephemeral=True)
-    else:
-        await interaction.response.send_message("❌ Category not found.", ephemeral=True)
+
+    # Delete category from DB
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "DELETE FROM custom_categories WHERE guild_id = ? AND name = ?",
+            (str(interaction.guild_id), name)
+        )
+        await db.commit()
+
+    await interaction.response.send_message(
+        f"✅ Custom category '{name}' removed.",
+        ephemeral=True
+    )
 
 # --- Autocomplete for remove_category ---
 @remove_category.autocomplete("name")
 async def remove_category_autocomplete(interaction: discord.Interaction, current: str):
     # Only show custom categories (not built-ins)
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    cats = list(guild_data.get("custom_categories", {}).keys())
+    custom = await load_categories(interaction.guild_id)
+    cats = list(custom.keys())
     return [
         app_commands.Choice(name=cat, value=cat)
         for cat in cats if current.lower() in cat.lower()
     ][:25]
+
 
 @tree.command(name="add_question", description="Add a question to a category")
 @app_commands.describe(category="Category to add the question to", question="The question text")
@@ -705,22 +722,32 @@ async def add_question(interaction: discord.Interaction, category: str, question
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
 
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-
-    # Allow adding to both built-in and custom categories
+    # Built-in categories are locked (cannot be modified)
     if category in BUILTIN_POOLS:
-        BUILTIN_POOLS[category].append(question)
-    else:
-        guild_data["custom_categories"].setdefault(category, []).append(question)
-        revive_settings[str(interaction.guild_id)] = guild_data
-        save_settings()
+        await interaction.response.send_message("❌ Cannot add questions to built-in categories.", ephemeral=True)
+        return
+
+    # Load existing questions from DB
+    custom = await load_categories(interaction.guild_id)
+    questions = custom.get(category, [])
+    questions.append(question)
+
+    # Save updated list back to DB
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "UPDATE custom_categories SET questions = ? WHERE guild_id = ? AND name = ?",
+            (json.dumps(questions), str(interaction.guild_id), category)
+        )
+        await db.commit()
 
     await interaction.response.send_message(f"✅ Question added to '{category}'.", ephemeral=True)
 
 # --- Autocomplete for add_question ---
 @add_question.autocomplete("category")
-async def add_question_autocomplete(interaction: discord.Interaction, current: str):
-    cats = all_categories(interaction.guild_id)  # built-in + custom
+@remove_question.autocomplete("category")
+async def question_category_autocomplete(interaction: discord.Interaction, current: str):
+    custom = await load_categories(interaction.guild_id)
+    cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
     return [
         app_commands.Choice(name=cat, value=cat)
         for cat in cats if current.lower() in cat.lower()
@@ -734,31 +761,40 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
 
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-
-    # Allow removing from both built-in and custom categories
+    # Built-in categories are locked (cannot be modified)
     if category in BUILTIN_POOLS:
-        try:
-            BUILTIN_POOLS[category].remove(question)
-            await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
-        except ValueError:
-            await interaction.response.send_message("❌ Question not found in that category.", ephemeral=True)
-    else:
-        if category not in guild_data["custom_categories"]:
-            await interaction.response.send_message("❌ Category not found.", ephemeral=True)
-            return
-        try:
-            guild_data["custom_categories"][category].remove(question)
-            revive_settings[str(interaction.guild_id)] = guild_data
-            save_settings()
-            await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
-        except ValueError:
-            await interaction.response.send_message("❌ Question not found in that category.", ephemeral=True)
+        await interaction.response.send_message("❌ Cannot remove questions from built-in categories.", ephemeral=True)
+        return
 
-# --- Autocomplete for remove_question ---
+    # Load existing questions from DB
+    custom = await load_categories(interaction.guild_id)
+    if category not in custom:
+        await interaction.response.send_message("❌ Category not found.", ephemeral=True)
+        return
+
+    questions = custom[category]
+    try:
+        questions.remove(question)
+    except ValueError:
+        await interaction.response.send_message("❌ Question not found in that category.", ephemeral=True)
+        return
+
+    # Save updated list back to DB
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "UPDATE custom_categories SET questions = ? WHERE guild_id = ? AND name = ?",
+            (json.dumps(questions), str(interaction.guild_id), category)
+        )
+        await db.commit()
+
+    await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
+
+
+@add_question.autocomplete("category")
 @remove_question.autocomplete("category")
-async def remove_question_autocomplete(interaction: discord.Interaction, current: str):
-    cats = all_categories(interaction.guild_id)  # built-in + custom
+async def question_category_autocomplete(interaction: discord.Interaction, current: str):
+    custom = await load_categories(interaction.guild_id)
+    cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
     return [
         app_commands.Choice(name=cat, value=cat)
         for cat in cats if current.lower() in cat.lower()
@@ -767,13 +803,13 @@ async def remove_question_autocomplete(interaction: discord.Interaction, current
 
 @tree.command(name="bot_status", description="Show full bot status")
 async def bot_status(interaction: discord.Interaction):
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
     embed = Embed(title="🤖 Bot Status", color=discord.Color.gold())
 
     # Revives
-    if guild_data["revives"]:
+    revives = await load_revives(interaction.guild_id)
+    if revives:
         revives_text = ""
-        for s in guild_data["revives"]:
+        for s in revives:
             channel = interaction.guild.get_channel(s["channel"])
             delay_min = s["delay"] // 60
             if channel:
@@ -785,14 +821,11 @@ async def bot_status(interaction: discord.Interaction):
         embed.add_field(name="Revive Channels", value="None", inline=False)
 
     # Categories
+    custom = await load_categories(interaction.guild_id)
     cats_text = ""
-    for cat in all_categories(interaction.guild_id):
+    for cat in list(BUILTIN_POOLS.keys()) + list(custom.keys()):
         builtin_count = len(BUILTIN_POOLS.get(cat, []))
-        custom_count = len(
-            revive_settings.get(str(interaction.guild_id), {})
-            .get("custom_categories", {})
-            .get(cat, [])
-        )
+        custom_count = len(custom.get(cat, []))
         cats_text += f"**{cat}** → {custom_count} custom, {builtin_count} built-in\n"
     embed.add_field(name="Categories", value=cats_text, inline=False)
 
@@ -813,86 +846,92 @@ async def revive_now(interaction: discord.Interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
 
-    # --- Stage 4: Cooldown check (10 minutes per guild) ---
+    # Cooldown check (10 minutes per guild)
     now = time.time()
     last = revive_cooldowns.get(interaction.guild_id, 0)
-    if now - last < 600:  # 600 seconds = 10 minutes
+    if now - last < 600:
         await interaction.response.send_message("❌ Cooldown active, try again later.", ephemeral=True)
         return
     revive_cooldowns[interaction.guild_id] = now
 
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    if not guild_data["revives"]:
+    revives = await load_revives(interaction.guild_id)
+    if not revives:
         await interaction.response.send_message("❌ No revive channels set.", ephemeral=True)
         return
 
-    for settings in guild_data["revives"]:
+    for settings in revives:
         channel = interaction.guild.get_channel(settings["channel"])
         if channel:
-            questions = get_questions(interaction.guild_id, settings["category"])
+            questions = await get_questions(interaction.guild_id, settings["category"])
             if questions:
                 question = random.choice(questions)
                 await channel.send(embed=make_embed(settings["category"], question))
 
-                # --- Section 5: Metrics + Logging ---
                 metrics_data[interaction.guild_id] = metrics_data.get(interaction.guild_id, 0) + 1
                 print(f"[Revive] {interaction.guild.name} → {channel.name} | {settings['category']}")
 
     await interaction.response.send_message("✅ Revive triggered in all configured channels.", ephemeral=True)
 
+              
+# --- Pagination View ---
+class QuestionPagination(View):
+    def __init__(self, questions, category, page=1, per_page=20):
+        super().__init__(timeout=60)  # disables buttons after 60s
+        self.questions = questions
+        self.category = category
+        self.page = page
+        self.per_page = per_page
+        self.total_pages = (len(questions) + per_page - 1) // per_page
+
+    def build_embed(self):
+        start = (self.page - 1) * self.per_page
+        end = start + self.per_page
+        page_questions = self.questions[start:end]
+
+        embed = Embed(title=f"📋 Questions in '{self.category}'", color=discord.Color.gold())
+        embed.description = "\n".join(f"{i}. {q}" for i, q in enumerate(page_questions, start=start + 1))
+        embed.set_footer(text=f"Page {self.page}/{self.total_pages} • {len(self.questions)} total questions")
+        return embed
+
+    @button(label="⬅️ Previous", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.page > 1:
+            self.page -= 1
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @button(label="➡️ Next", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.page < self.total_pages:
+            self.page += 1
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
 @tree.command(name="list_questions", description="List all questions in a category with pagination")
-@app_commands.describe(category="Category to list questions from", page="Page number to view")
-async def list_questions(
-    interaction: discord.Interaction,
-    category: str,
-    page: int = 1
-):
+@app_commands.describe(category="Category to list questions from")
+async def list_questions(interaction: discord.Interaction, category: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
 
-    # Get questions (custom first, then built-in)
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    custom = guild_data.get("custom_categories", {}).get(category, [])
+    custom = (await load_categories(interaction.guild_id)).get(category, [])
     builtin = BUILTIN_POOLS.get(category, [])
-    questions = custom + builtin    
+    questions = custom + builtin
 
     if not questions:
         await interaction.response.send_message("❌ No questions found in that category.", ephemeral=True)
         return
 
-    # Pagination (20 per page)
-    per_page = 20
-    total_pages = (len(questions) + per_page - 1) // per_page
-    if page < 1 or page > total_pages:
-        await interaction.response.send_message(f"❌ Invalid page. Choose 1–{total_pages}.", ephemeral=True)
-        return
+    view = QuestionPagination(questions, category)
+    await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
 
-    start = (page - 1) * per_page
-    end = start + per_page
-    page_questions = questions[start:end]
 
-    # Build embed
-    embed = Embed(
-        title=f"📋 Questions in '{category}'",
-        color=discord.Color.gold()
-    )
-    desc = ""
-    for i, q in enumerate(page_questions, start=start + 1):
-        desc += f"{i}. {q}\n"
-    embed.description = desc
-    embed.set_footer(text=f"Page {page}/{total_pages} • {len(questions)} total questions")
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# --- Autocomplete for list_questions ---
 @list_questions.autocomplete("category")
 async def list_questions_autocomplete(interaction: discord.Interaction, current: str):
-    cats = all_categories(interaction.guild_id)
+    cats = await all_categories(interaction.guild_id)
     return [
         app_commands.Choice(name=cat, value=cat)
         for cat in cats if current.lower() in cat.lower()
     ][:25]
+
 
 
    
@@ -900,29 +939,26 @@ async def list_questions_autocomplete(interaction: discord.Interaction, current:
 @tasks.loop(minutes=5)
 async def revive_loop():
     for guild in client.guilds:
-        guild_data = revive_settings.get(str(guild.id), {"revives": [], "custom_categories": {}})
-        for settings in guild_data["revives"]:
-            channel = guild.get_channel(settings.get("channel"))
+        revives = await load_revives(guild.id)
+        for settings in revives:
+            channel = guild.get_channel(settings["channel"])
             delay = settings.get("delay", 7200)
             if channel:
                 try:
                     async for message in channel.history(limit=1):
                         if (discord.utils.utcnow() - message.created_at).total_seconds() > delay:
-                            questions = get_questions(guild.id, settings["category"])
+                            questions = await get_questions(guild.id, settings["category"])
                             if questions:
                                 question = random.choice(questions)
                                 await channel.send(embed=make_embed(settings["category"], question))
 
-                                # --- Section 5: Metrics + Logging ---
                                 metrics_data[guild.id] = metrics_data.get(guild.id, 0) + 1
                                 print(f"[Revive] {guild.name} → {channel.name} | {settings['category']}")
                 except Exception as e:
                     print(f"⚠️ Could not check {channel}: {e}")
             else:
-                # --- Stage 4: Cleanup for deleted channels ---
-                guild_data["revives"].remove(settings)
-                revive_settings[str(guild.id)] = guild_data
-                save_settings()
+                # Cleanup for deleted channels
+                await remove_revive(guild.id, settings["channel"])
                 print(f"⚠️ Removed revive entry for deleted channel in {guild.name}")
 
 # ---------- Run ----------
