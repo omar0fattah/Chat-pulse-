@@ -120,26 +120,34 @@ async def help_cmd(interaction: discord.Interaction):
         f"- /add_question (add question to category)\n"
         f"- /remove_question (remove question from category)\n"
         f"- /revive_now (manual trigger)\n"
-        f"- /show_revive_settings (view revive channels)\n"
         f"- /bot_status (full bot status)\n"
         f"- /ping (check bot)\n\n"
         f"🎯 **Categories:** {categories}",
         ephemeral=True
     )
 
+
 @tree.command(name="setup_revive", description="Add a revive channel with delay and category")
-async def setup_revive(interaction: discord.Interaction, channel: discord.TextChannel, minutes: int = 120, category: str = "general"):
+async def setup_revive(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    minutes: int = 120,
+    category: str = "general"
+):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
         return
     if minutes < 1:
         await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
         return
-    if category not in all_categories(interaction.guild_id):
-        await interaction.response.send_message(f"❌ Invalid category. Choose from: {', '.join(all_categories(interaction.guild_id))}", ephemeral=True)
-        return
 
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    # Prevent duplicate revive setups for the same channel
+    for s in guild_data["revives"]:
+        if s["channel"] == channel.id:
+            await interaction.response.send_message("❌ This channel already has a revive setup.", ephemeral=True)
+            return
+
     guild_data["revives"].append({"channel": channel.id, "delay": minutes * 60, "category": category})
     revive_settings[str(interaction.guild_id)] = guild_data
     save_settings()
@@ -148,6 +156,7 @@ async def setup_revive(interaction: discord.Interaction, channel: discord.TextCh
         f"✅ Added revive in {channel.mention}, delay {minutes} minutes, category {category}.",
         ephemeral=True
     )
+
 
 @tree.command(name="remove_revive", description="Remove revive from a channel")
 async def remove_revive(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -229,21 +238,6 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
     revive_settings[str(interaction.guild_id)] = guild_data
     save_settings()
     await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
-
-@tree.command(name="show_revive_settings", description="View revive settings for this server")
-async def show_revive_settings(interaction: discord.Interaction):
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    if not guild_data["revives"]:
-        await interaction.response.send_message("❌ No revive channels set.", ephemeral=True)
-        return
-
-    msg = "📊 **Revive Settings:**\n"
-    for s in guild_data["revives"]:
-        channel = interaction.guild.get_channel(s["channel"])
-        delay_min = s["delay"] // 60
-        msg += f"- {channel.mention if channel else 'Unknown'} | Delay: {delay_min} min | Category: {s['category']}\n"
-
-    await interaction.response.send_message(msg, ephemeral=True)
 
 @tree.command(name="bot_status", description="Show full bot status")
 async def bot_status(interaction: discord.Interaction):
