@@ -592,6 +592,7 @@ async def category_autocomplete(interaction: discord.Interaction, current: str):
 
 
 @tree.command(name="remove_revive", description="Remove revive from a channel")
+@app_commands.describe(channel="Channel that currently has a revive setup")
 async def remove_revive(interaction: discord.Interaction, channel: discord.TextChannel):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
@@ -603,6 +604,17 @@ async def remove_revive(interaction: discord.Interaction, channel: discord.TextC
     save_settings()
 
     await interaction.response.send_message(f"✅ Revive removed from {channel.mention}.", ephemeral=True)
+
+# --- Autocomplete for remove_revive ---
+@remove_revive.autocomplete("channel")
+async def remove_revive_autocomplete(interaction: discord.Interaction, current: str):
+    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    choices = []
+    for s in guild_data.get("revives", []):
+        ch = interaction.guild.get_channel(s["channel"])
+        if ch and current.lower() in ch.name.lower():
+            choices.append(app_commands.Choice(name=ch.name, value=str(ch.id)))
+    return choices[:25]
 
 @tree.command(name="add_category", description="Add a new custom category")
 async def add_category(interaction: discord.Interaction, name: str):
