@@ -1,5 +1,6 @@
 import os
 import random
+import aiosqlite
 import json
 import discord
 from discord import app_commands, Embed
@@ -456,23 +457,55 @@ tree = client.tree
 revive_settings = {}
 
 # ---------- Persistence ----------
-def load_settings():
-    global revive_settings
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, "r") as f:
-            revive_settings = json.load(f)
-    else:
-        revive_settings = {}
+DB_FILE = "revive_settings.db"
 
-def save_settings():
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(revive_settings, f, indent=2)
+async def init_db():
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS revives (
+            guild_id TEXT,
+            channel_id INTEGER,
+            delay INTEGER,
+            category TEXT
+        )
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS custom_categories (
+            guild_id TEXT,
+            name TEXT,
+            questions TEXT  -- store as JSON string
+        )
+        """)
+        await db.commit()
+
+async def load_revives(guild_id: int):
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("SELECT channel_id, delay, category FROM revives WHERE guild_id = ?", (str(guild_id),))
+        rows = await cursor.fetchall()
+        return [{"channel": r[0], "delay": r[1], "category": r[2]} for r in rows]
+
+async def save_revive(guild_id: int, channel_id: int, delay: int, category: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("INSERT INTO revives VALUES (?, ?, ?, ?)", (str(guild_id), channel_id, delay, category))
+        await db.commit()
+
+async def remove_revive(guild_id: int, channel_id: int):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("DELETE FROM revives WHERE guild_id = ? AND channel_id = ?", (str(guild_id), channel_id))
+        await db.commit()
+
+async def load_categories(guild_id: int):
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("SELECT name, questions FROM custom_categories WHERE guild_id = ?", (str(guild_id),))
+        rows = await cursor.fetchall()
+        return {r[0]: json.loads(r[1]) for r in rows}
+
 
 # ---------- Events ----------
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user}")
-    load_settings()
+    await init_db()  # initialize SQLite tables instead of loading JSON
 
     guild = discord.Object(id=1413551789034307657)  # dev server ID
     global_cmds = await tree.sync()
@@ -481,6 +514,7 @@ async def on_ready():
     print(f"⚡ Synced {len(guild_cmds)} commands to guild {guild.id}")
 
     revive_loop.start()
+
 
 # ---------- Helpers ----------
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -563,16 +597,14 @@ async def setup_revive(
         await interaction.response.send_message("❌ I cannot send messages in that channel.", ephemeral=True)
         return
 
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    for s in guild_data["revives"]:
-        if s["channel"] == channel.id:
-            await interaction.response.send_message("❌ This channel already has a revive setup.", ephemeral=True)
-            return
+    # Check if channel already has a revive setup
+    revives = await load_revives(interaction.guild_id)
+    if any(s["channel"] == channel.id for s in revives):
+        await interaction.response.send_message("❌ This channel already has a revive setup.", ephemeral=True)
+        return
 
-    # Save the revive setup
-    guild_data["revives"].append({"channel": channel.id, "delay": minutes * 60, "category": category})
-    revive_settings[str(interaction.guild_id)] = guild_data
-    save_settings()
+    # Save the revive setup in DB
+    await save_revive(interaction.guild_id, channel.id, minutes * 60, category)
 
     await interaction.response.send_message(
         f"✅ Added revive in {channel.mention}, delay {minutes} minutes, category {category}.",
@@ -582,14 +614,17 @@ async def setup_revive(
 # --- Autocomplete for category ---
 @setup_revive.autocomplete("category")
 async def category_autocomplete(interaction: discord.Interaction, current: str):
-    # Get all categories for this guild (built‑in + custom)
-    cats = all_categories(interaction.guild_id)
-    # Filter by what the user typed so far
+    # Load custom categories from DB
+    custom = await load_categories(interaction.guild_id)
+    # Combine built-in + custom
+    cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
+    # Filter by what the user typed
     return [
         app_commands.Choice(name=cat, value=cat)
         for cat in cats if current.lower() in cat.lower()
     ][:25]  # Discord allows max 25 choices
 
+  
 
 @tree.command(name="remove_revive", description="Remove revive from a channel")
 @app_commands.describe(channel="Channel that currently has a revive setup")
@@ -604,19 +639,18 @@ async def remove_revive(interaction: discord.Interaction, channel: str):
         await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
         return
 
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    guild_data["revives"] = [s for s in guild_data["revives"] if s["channel"] != ch.id]
-    revive_settings[str(interaction.guild_id)] = guild_data
-    save_settings()
+    # Remove revive from DB
+    await remove_revive(interaction.guild_id, ch.id)
 
     await interaction.response.send_message(f"✅ Revive removed from {ch.mention}.", ephemeral=True)
 
 # --- Autocomplete for remove_revive ---
 @remove_revive.autocomplete("channel")
 async def remove_revive_autocomplete(interaction: discord.Interaction, current: str):
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    # Load revives from DB instead of revive_settings
+    revives = await load_revives(interaction.guild_id)
     choices = []
-    for s in guild_data.get("revives", []):
+    for s in revives:
         ch = interaction.guild.get_channel(s["channel"])
         if ch and current.lower() in ch.name.lower():
             choices.append(app_commands.Choice(name=ch.name, value=str(ch.id)))
