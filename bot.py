@@ -545,6 +545,7 @@ async def help_cmd(interaction: discord.Interaction):
 
 
 @tree.command(name="setup_revive", description="Add a revive channel with delay and category")
+@app_commands.describe(channel="Channel to revive", minutes="Delay in minutes", category="Category to use")
 async def setup_revive(
     interaction: discord.Interaction,
     channel: discord.TextChannel,
@@ -558,18 +559,17 @@ async def setup_revive(
         await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
         return
 
-    # --- Stage 4: Permission validation ---
     if not channel.permissions_for(interaction.guild.me).send_messages:
         await interaction.response.send_message("❌ I cannot send messages in that channel.", ephemeral=True)
         return
 
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    # Prevent duplicate revive setups for the same channel
     for s in guild_data["revives"]:
         if s["channel"] == channel.id:
             await interaction.response.send_message("❌ This channel already has a revive setup.", ephemeral=True)
             return
 
+    # Save the revive setup
     guild_data["revives"].append({"channel": channel.id, "delay": minutes * 60, "category": category})
     revive_settings[str(interaction.guild_id)] = guild_data
     save_settings()
@@ -578,6 +578,17 @@ async def setup_revive(
         f"✅ Added revive in {channel.mention}, delay {minutes} minutes, category {category}.",
         ephemeral=True
     )
+
+# --- Autocomplete for category ---
+@setup_revive.autocomplete("category")
+async def category_autocomplete(interaction: discord.Interaction, current: str):
+    # Get all categories for this guild (built‑in + custom)
+    cats = all_categories(interaction.guild_id)
+    # Filter by what the user typed so far
+    return [
+        app_commands.Choice(name=cat, value=cat)
+        for cat in cats if current.lower() in cat.lower()
+    ][:25]  # Discord allows max 25 choices
 
 
 @tree.command(name="remove_revive", description="Remove revive from a channel")
@@ -623,6 +634,17 @@ async def remove_category(interaction: discord.Interaction, name: str):
         await interaction.response.send_message(f"✅ Custom category '{name}' removed.", ephemeral=True)
     else:
         await interaction.response.send_message("❌ Category not found.", ephemeral=True)
+
+# --- Autocomplete for remove_category ---
+@remove_category.autocomplete("name")
+async def remove_category_autocomplete(interaction: discord.Interaction, current: str):
+    # Only show custom categories (not built-ins)
+    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    cats = list(guild_data.get("custom_categories", {}).keys())
+    return [
+        app_commands.Choice(name=cat, value=cat)
+        for cat in cats if current.lower() in cat.lower()
+    ][:25]
 
 @tree.command(name="add_question", description="Add a question to a category")
 async def add_question(interaction: discord.Interaction, category: str, question: str):
