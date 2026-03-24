@@ -622,17 +622,6 @@ async def remove_revive_autocomplete(interaction: discord.Interaction, current: 
             choices.append(app_commands.Choice(name=ch.name, value=str(ch.id)))
     return choices[:25]
 
-# --- Autocomplete for remove_revive ---
-@remove_revive.autocomplete("channel")
-async def remove_revive_autocomplete(interaction: discord.Interaction, current: str):
-    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
-    choices = []
-    for s in guild_data.get("revives", []):
-        ch = interaction.guild.get_channel(s["channel"])
-        if ch and current.lower() in ch.name.lower():
-            choices.append(app_commands.Choice(name=ch.name, value=str(ch.id)))
-    return choices[:25]
-
 @tree.command(name="add_category", description="Add a new custom category")
 async def add_category(interaction: discord.Interaction, name: str):
     if not is_admin(interaction):
