@@ -98,13 +98,6 @@ BUILTIN_POOLS = {
         "📱 Do you prefer group chats or DMs?",
         "📱 Do you prefer memes or reels?",
         "📱 Do you prefer stories or posts?",
-        "📱 Do you prefer likes or comments?",
-        "📱 Do you prefer followers or friends?",
-        "📱 Do you prefer private or public accounts?",
-        "📱 Do you prefer notifications on or off?",
-        "📱 Do you prefer dark mode or light mode?",
-        "📱 Do you prefer Android or iOS?",
-        "📱 Do you prefer Windows or Mac?",
         "📱 Do you prefer Linux or Windows?",
         "📱 Do you prefer Chrome or Firefox?",
         "📱 Do you prefer Edge or Safari?",
@@ -119,9 +112,7 @@ BUILTIN_POOLS = {
         "📱 Do you prefer hot weather or cold weather?",
         "📱 Do you prefer rain or snow?",
         "🔥 Share the last song you listened to!",
-        "💡 What’s a random fun fact you know?",
-        "🍕 Pineapple on pizza: yes or no?",
-        "🎮 What game are you playing lately?"
+        "💡 What’s a random fun fact you know?"
     ],
     "apex": [
               # Beginner (33)
