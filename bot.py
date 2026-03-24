@@ -744,8 +744,7 @@ async def add_question(interaction: discord.Interaction, category: str, question
 
 # --- Autocomplete for add_question ---
 @add_question.autocomplete("category")
-@remove_question.autocomplete("category")
-async def question_category_autocomplete(interaction: discord.Interaction, current: str):
+async def add_category_autocomplete(interaction: discord.Interaction, current: str):
     custom = await load_categories(interaction.guild_id)
     cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
     return [
@@ -789,10 +788,8 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
 
     await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
 
-
-@add_question.autocomplete("category")
 @remove_question.autocomplete("category")
-async def question_category_autocomplete(interaction: discord.Interaction, current: str):
+async def remove_category_autocomplete(interaction: discord.Interaction, current: str):
     custom = await load_categories(interaction.guild_id)
     cats = list(BUILTIN_POOLS.keys()) + list(custom.keys())
     return [
