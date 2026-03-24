@@ -647,6 +647,7 @@ async def remove_category_autocomplete(interaction: discord.Interaction, current
     ][:25]
 
 @tree.command(name="add_question", description="Add a question to a category")
+@app_commands.describe(category="Category to add the question to", question="The question text")
 async def add_question(interaction: discord.Interaction, category: str, question: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
@@ -654,16 +655,30 @@ async def add_question(interaction: discord.Interaction, category: str, question
     if category in BUILTIN_POOLS:
         await interaction.response.send_message("❌ Cannot add questions to built-in categories.", ephemeral=True)
         return
+
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
     if category not in guild_data["custom_categories"]:
         await interaction.response.send_message("❌ Category not found.", ephemeral=True)
         return
+
     guild_data["custom_categories"][category].append(question)
     revive_settings[str(interaction.guild_id)] = guild_data
     save_settings()
     await interaction.response.send_message(f"✅ Question added to '{category}'.", ephemeral=True)
 
+# Autocomplete for add_question
+@add_question.autocomplete("category")
+async def add_question_autocomplete(interaction: discord.Interaction, current: str):
+    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    cats = list(guild_data.get("custom_categories", {}).keys())
+    return [
+        app_commands.Choice(name=cat, value=cat)
+        for cat in cats if current.lower() in cat.lower()
+    ][:25]
+
+
 @tree.command(name="remove_question", description="Remove a question from a category")
+@app_commands.describe(category="Category to remove the question from", question="The exact question text")
 async def remove_question(interaction: discord.Interaction, category: str, question: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ You need Manage Server permission.", ephemeral=True)
@@ -671,6 +686,7 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
     if category in BUILTIN_POOLS:
         await interaction.response.send_message("❌ Cannot remove questions from built-in categories.", ephemeral=True)
         return
+
     guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
     if category not in guild_data["custom_categories"]:
         await interaction.response.send_message("❌ Category not found.", ephemeral=True)
@@ -678,10 +694,22 @@ async def remove_question(interaction: discord.Interaction, category: str, quest
     if question not in guild_data["custom_categories"][category]:
         await interaction.response.send_message("❌ Question not found in that category.", ephemeral=True)
         return
+
     guild_data["custom_categories"][category].remove(question)
     revive_settings[str(interaction.guild_id)] = guild_data
     save_settings()
     await interaction.response.send_message(f"✅ Question removed from '{category}'.", ephemeral=True)
+
+# Autocomplete for remove_question
+@remove_question.autocomplete("category")
+async def remove_question_autocomplete(interaction: discord.Interaction, current: str):
+    guild_data = revive_settings.get(str(interaction.guild_id), {"revives": [], "custom_categories": {}})
+    cats = list(guild_data.get("custom_categories", {}).keys())
+    return [
+        app_commands.Choice(name=cat, value=cat)
+        for cat in cats if current.lower() in cat.lower()
+    ][:25]
+
 
 @tree.command(name="bot_status", description="Show full bot status")
 async def bot_status(interaction: discord.Interaction):
