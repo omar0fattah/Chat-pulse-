@@ -16,7 +16,7 @@ SETTINGS_FILE = "revive_settings.json"
 BUILTIN_POOLS = {
     "general": [
         "👀 What’s everyone up to today?",
-                "🌍 If you could live anywhere, where would it be?",
+        "🌍 If you could live anywhere, where would it be?",
         "🎶 What’s your favorite song right now?",
         "📚 What book are you currently reading?",
         "🎬 Favorite movie of all time?",
